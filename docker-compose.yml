@@ -1,0 +1,15 @@
+version: '3.8'
+services:
+  qflow:
+    build: .
+    container_name: qflow-pro
+    restart: always
+    ports:
+      - "3000:3000"
+    volumes:
+      # Map the db.json to host so data persists across container updates
+      - ./db.json:/app/db.json
+    environment:
+      - NODE_ENV=production
+    # If running in Proxmox LXC with limited resources
+    mem_limit: 512m

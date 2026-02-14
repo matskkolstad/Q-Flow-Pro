@@ -1,0 +1,245 @@
+{
+  "services": [
+    {
+      "id": "s1",
+      "name": "Kundeservice",
+      "prefix": "K",
+      "color": "bg-blue-600",
+      "estimatedTimePerPersonMinutes": 5,
+      "isOpen": true
+    },
+    {
+      "id": "s2",
+      "name": "Teknisk Support",
+      "prefix": "T",
+      "color": "bg-purple-600",
+      "estimatedTimePerPersonMinutes": 15,
+      "isOpen": true
+    },
+    {
+      "id": "s3",
+      "name": "Levering & Retur",
+      "prefix": "L",
+      "color": "bg-emerald-600",
+      "estimatedTimePerPersonMinutes": 3,
+      "isOpen": true
+    }
+  ],
+  "counters": [
+    {
+      "id": "c1",
+      "name": "Skranke 1",
+      "activeServiceIds": [
+        "s1",
+        "s3"
+      ],
+      "isOnline": true
+    },
+    {
+      "id": "c2",
+      "name": "Skranke 2",
+      "activeServiceIds": [
+        "s1",
+        "s2",
+        "s3"
+      ],
+      "isOnline": true
+    },
+    {
+      "id": "c3",
+      "name": "VIP Skranke",
+      "activeServiceIds": [
+        "s2"
+      ],
+      "isOnline": false
+    }
+  ],
+  "isClosed": false,
+  "users": [
+    {
+      "id": "u1",
+      "name": "Admin Bruker",
+      "role": "ADMIN",
+      "username": "mats",
+      "passwordHash": "03ac674216f3e15c761ee1a5e255f067953623c8b388b4459e13f978d7c846f4"
+    }
+  ],
+  "tickets": [
+    {
+      "id": "9cvccx3rg",
+      "number": "K001",
+      "serviceId": "s1",
+      "status": "COMPLETED",
+      "createdAt": 1770992222022,
+      "counterId": "c1",
+      "calledAt": 1770992250392,
+      "completedAt": 1770993066298
+    },
+    {
+      "id": "7ld3gnwq0",
+      "number": "K002",
+      "serviceId": "s1",
+      "status": "WAITING",
+      "createdAt": 1770993358265
+    },
+    {
+      "id": "n7s2d4inh",
+      "number": "T001",
+      "serviceId": "s2",
+      "status": "WAITING",
+      "createdAt": 1770993364381
+    },
+    {
+      "id": "qr8okz464",
+      "number": "L001",
+      "serviceId": "s3",
+      "status": "WAITING",
+      "createdAt": 1770993368365
+    }
+  ],
+  "printers": [
+    {
+      "name": "Kiosk 1",
+      "ipAddress": "192.168.68.73",
+      "port": 9100,
+      "type": "EPSON_IP",
+      "id": "nbgnckltg",
+      "status": "ONLINE"
+    }
+  ],
+  "kiosks": [],
+  "kioskPrinterAssignments": {
+    "kiosk_ghlhn8": "nbgnckltg"
+  },
+  "counterDisplays": [],
+  "soundSettings": {
+    "kioskEffects": true,
+    "adminEffects": true,
+    "callChime": true,
+    "callVoice": true
+  },
+  "branding": {
+    "brandText": "Q-Flow Pro",
+    "brandLogoUrl": ""
+  },
+  "kioskExitPin": "1234",
+  "logs": [
+    {
+      "id": "rzs7fzney",
+      "timestamp": 1770993804728,
+      "message": "Fjernet 1 inaktive kiosker etter inaktivitet",
+      "type": "INFO"
+    },
+    {
+      "id": "s9ay6fy4k",
+      "timestamp": 1770993368607,
+      "message": "Sendte billett L001 til skriver 192.168.68.73:9100",
+      "type": "INFO"
+    },
+    {
+      "id": "qtpuecqhk",
+      "timestamp": 1770993368365,
+      "message": "Ny billett trukket: L001 (Levering & Retur)",
+      "type": "ACTION"
+    },
+    {
+      "id": "wq61r5xb4",
+      "timestamp": 1770993364621,
+      "message": "Sendte billett T001 til skriver 192.168.68.73:9100",
+      "type": "INFO"
+    },
+    {
+      "id": "qcjsfepia",
+      "timestamp": 1770993364381,
+      "message": "Ny billett trukket: T001 (Teknisk Support)",
+      "type": "ACTION"
+    },
+    {
+      "id": "ln7akr8ov",
+      "timestamp": 1770993358529,
+      "message": "Sendte billett K002 til skriver 192.168.68.73:9100",
+      "type": "INFO"
+    },
+    {
+      "id": "bunzyx5vl",
+      "timestamp": 1770993358265,
+      "message": "Ny billett trukket: K002 (Kundeservice)",
+      "type": "ACTION"
+    },
+    {
+      "id": "4bapu7zia",
+      "timestamp": 1770993300835,
+      "message": "Ny Kiosk registrert: Kiosk LHN8",
+      "type": "INFO"
+    },
+    {
+      "id": "ksr13vvc9",
+      "timestamp": 1770992293422,
+      "message": "Fjernet 1 inaktive kiosker etter inaktivitet",
+      "type": "INFO"
+    },
+    {
+      "id": "bflxkvaj9",
+      "timestamp": 1770992250392,
+      "message": "Skranke Skranke 1 kaller inn K001",
+      "type": "ACTION"
+    },
+    {
+      "id": "y4dgy8nhi",
+      "timestamp": 1770992250391,
+      "message": "Skranke Skranke 1 kaller inn K001",
+      "type": "ACTION"
+    },
+    {
+      "id": "4r4jfvpgm",
+      "timestamp": 1770992222022,
+      "message": "Ny billett trukket: K001 (Kundeservice)",
+      "type": "ACTION"
+    },
+    {
+      "id": "vwaw5v5xc",
+      "timestamp": 1770992219324,
+      "message": "Ny Kiosk registrert: Kiosk LHN8",
+      "type": "INFO"
+    }
+  ],
+  "publicMessage": "",
+  "sessions": {
+    "31e453fcf8bffb0d0e766cb84fb0a9f4": {
+      "userId": "u1",
+      "createdAt": 1770992014271
+    },
+    "3a0ef4e77fd6e0c1a56bbd60b282e2e7": {
+      "userId": "u1",
+      "createdAt": 1770992039359
+    },
+    "92cb284b932e3b929894a2a920484e61": {
+      "userId": "u1",
+      "createdAt": 1770992073487
+    },
+    "f709cfca7c8b5d92707949e898c5ab7d": {
+      "userId": "u1",
+      "createdAt": 1770992205142
+    },
+    "d04b3d7c4c1c7a0e27783261580b48b7": {
+      "userId": "u1",
+      "createdAt": 1770992257319
+    },
+    "c3b0a469936c3d4accadf298604a24d3": {
+      "userId": "u1",
+      "createdAt": 1770992309349
+    },
+    "417fc9780ee69e7bc06277a3dc708633": {
+      "userId": "u1",
+      "createdAt": 1770992524739
+    },
+    "e5a6f88c6db98fbd9010557e78414d90": {
+      "userId": "u1",
+      "createdAt": 1770992539739
+    },
+    "7d8575af6f0694816a758edd27655716": {
+      "userId": "u1",
+      "createdAt": 1770992556816
+    }
+  }
+}

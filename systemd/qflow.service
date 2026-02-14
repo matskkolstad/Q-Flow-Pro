@@ -1,0 +1,21 @@
+[Unit]
+Description=Q-Flow queue service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+WorkingDirectory=/opt/qflow
+EnvironmentFile=-/etc/qflow/qflow.env
+Environment=HOST=0.0.0.0
+Environment=PORT=3000
+Environment=NODE_ENV=production
+User=qflow
+Group=qflow
+ExecStart=/usr/bin/env node server.js
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
