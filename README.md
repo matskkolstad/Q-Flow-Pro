@@ -33,12 +33,11 @@
 - Server owns state/logging; clients receive `init-state` + `state-update` events.
 
 ## Screenshots
-Replace placeholders with your own captures (store in `docs/images/` or external links):
-- Admin dashboard: ![Admin Dashboard](https://via.placeholder.com/1200x600?text=Admin+Dashboard)
-- Public display: ![Public Display](https://via.placeholder.com/1200x600?text=Public+Display)
-- Counter display: ![Counter Display](https://via.placeholder.com/1200x600?text=Counter+Display)
-- Kiosk: ![Kiosk](https://via.placeholder.com/1200x600?text=Kiosk)
-- Mobile client: ![Mobile Client](https://via.placeholder.com/1200x600?text=Mobile+Client)
+- Admin dashboard: ![Admin Dashboard](docs/images/admin-dashboard.svg)
+- Public display: ![Public Display](docs/images/public-display.svg)
+- Counter display: ![Counter Display](docs/images/counter-display.svg)
+- Kiosk: ![Kiosk](docs/images/kiosk.svg)
+- Mobile client: ![Mobile Client](docs/images/mobile-client.svg)
 
 ## Requirements
 - Node.js 18+ (LTS recommended)

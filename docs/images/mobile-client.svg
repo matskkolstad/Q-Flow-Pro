@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="675" viewBox="0 0 1200 675" fill="none">
+  <rect width="1200" height="675" rx="24" fill="#0f172a"/>
+  <rect x="440" y="60" width="320" height="555" rx="36" fill="#111827" stroke="#1e293b" stroke-width="2"/>
+  <rect x="480" y="120" width="240" height="60" rx="18" fill="#0ea5e9"/>
+  <text x="600" y="158" fill="#0b1222" font-family="Arial" font-size="22" font-weight="800" text-anchor="middle">Q-Flow Pro</text>
+  <text x="600" y="200" fill="#cbd5e1" font-family="Arial" font-size="16" text-anchor="middle">Mobile Ticket</text>
+  <rect x="480" y="230" width="240" height="200" rx="24" fill="#1f2937"/>
+  <text x="600" y="280" fill="#f8fafc" font-family="Arial" font-size="56" font-weight="900" text-anchor="middle">A107</text>
+  <text x="600" y="320" fill="#94a3b8" font-family="Arial" font-size="16" text-anchor="middle">Customer Service</text>
+  <text x="600" y="360" fill="#94a3b8" font-family="Arial" font-size="14" text-anchor="middle">Ahead in queue: 3</text>
+  <rect x="480" y="460" width="240" height="48" rx="14" fill="#22c55e"/>
+  <text x="600" y="492" fill="#0b1222" font-family="Arial" font-size="18" font-weight="800" text-anchor="middle">Notify me</text>
+  <text x="600" y="544" fill="#94a3b8" font-family="Arial" font-size="12" text-anchor="middle">We’ll alert you when it’s your turn</text>
+</svg>

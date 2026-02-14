@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="675" viewBox="0 0 1200 675" fill="none">
+  <rect width="1200" height="675" rx="24" fill="#0f172a"/>
+  <rect x="36" y="28" width="200" height="36" rx="8" fill="#1e293b"/>
+  <text x="48" y="52" fill="#e2e8f0" font-family="Arial" font-size="18" font-weight="700">Q-Flow Pro · Admin</text>
+  <rect x="36" y="88" width="220" height="520" rx="18" fill="#111827" stroke="#1f2937" stroke-width="2"/>
+  <rect x="280" y="88" width="884" height="520" rx="18" fill="#0b1222" stroke="#1f2937" stroke-width="2"/>
+  <text x="62" y="132" fill="#cbd5e1" font-family="Arial" font-size="16" font-weight="700">Navigation</text>
+  <text x="62" y="166" fill="#94a3b8" font-family="Arial" font-size="14">Dashboard</text>
+  <text x="62" y="196" fill="#94a3b8" font-family="Arial" font-size="14">Services</text>
+  <text x="62" y="226" fill="#94a3b8" font-family="Arial" font-size="14">Counters</text>
+  <text x="62" y="256" fill="#94a3b8" font-family="Arial" font-size="14">Users</text>
+  <text x="62" y="286" fill="#94a3b8" font-family="Arial" font-size="14">Devices</text>
+  <text x="62" y="316" fill="#94a3b8" font-family="Arial" font-size="14">Branding</text>
+  <rect x="320" y="128" width="804" height="140" rx="16" fill="#111827" stroke="#1e293b" stroke-width="2"/>
+  <rect x="320" y="292" width="804" height="140" rx="16" fill="#111827" stroke="#1e293b" stroke-width="2"/>
+  <rect x="320" y="456" width="804" height="120" rx="16" fill="#111827" stroke="#1e293b" stroke-width="2"/>
+  <text x="344" y="162" fill="#e2e8f0" font-family="Arial" font-size="18" font-weight="700">Queue overview</text>
+  <text x="344" y="326" fill="#e2e8f0" font-family="Arial" font-size="18" font-weight="700">Counters & services</text>
+  <text x="344" y="490" fill="#e2e8f0" font-family="Arial" font-size="18" font-weight="700">Logs & events</text>
+  <rect x="900" y="148" width="180" height="36" rx="10" fill="#10b981"/>
+  <text x="940" y="172" fill="#0b1222" font-family="Arial" font-size="14" font-weight="700">Call next</text>
+  <rect x="900" y="188" width="180" height="36" rx="10" fill="#3b82f6"/>
+  <text x="936" y="212" fill="#0b1222" font-family="Arial" font-size="14" font-weight="700">Close / Open</text>
+  <rect x="344" y="352" width="220" height="52" rx="12" fill="#1f2937"/>
+  <rect x="582" y="352" width="220" height="52" rx="12" fill="#1f2937"/>
+  <rect x="820" y="352" width="220" height="52" rx="12" fill="#1f2937"/>
+  <text x="362" y="384" fill="#cbd5e1" font-family="Arial" font-size="14" font-weight="700">Counter A</text>
+  <text x="602" y="384" fill="#cbd5e1" font-family="Arial" font-size="14" font-weight="700">Counter B</text>
+  <text x="840" y="384" fill="#cbd5e1" font-family="Arial" font-size="14" font-weight="700">Counter C</text>
+  <rect x="360" y="516" width="240" height="34" rx="10" fill="#1f2937"/>
+  <rect x="620" y="516" width="240" height="34" rx="10" fill="#1f2937"/>
+  <rect x="880" y="516" width="200" height="34" rx="10" fill="#1f2937"/>
+</svg>

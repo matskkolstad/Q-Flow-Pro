@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="675" viewBox="0 0 1200 675" fill="none">
+  <rect width="1200" height="675" rx="24" fill="#0b1222"/>
+  <text x="48" y="80" fill="#e2e8f0" font-family="Arial" font-size="28" font-weight="800">Now Serving</text>
+  <rect x="40" y="110" width="1120" height="200" rx="18" fill="#111827" stroke="#1e293b" stroke-width="2"/>
+  <rect x="72" y="144" width="160" height="160" rx="24" fill="#2563eb"/>
+  <text x="118" y="228" fill="#f8fafc" font-family="Arial" font-size="64" font-weight="800">A</text>
+  <text x="260" y="190" fill="#e2e8f0" font-family="Arial" font-size="60" font-weight="900">A107</text>
+  <text x="262" y="240" fill="#94a3b8" font-family="Arial" font-size="20" font-weight="700">Customer Service</text>
+  <text x="960" y="200" fill="#34d399" font-family="Arial" font-size="40" font-weight="900" text-anchor="end">Counter 3</text>
+  <text x="960" y="240" fill="#9ca3af" font-family="Arial" font-size="18" font-weight="700" text-anchor="end">Proceed now</text>
+
+  <text x="48" y="360" fill="#e2e8f0" font-family="Arial" font-size="24" font-weight="800">Up Next</text>
+  <rect x="40" y="380" width="1120" height="220" rx="18" fill="#111827" stroke="#1e293b" stroke-width="2"/>
+  <rect x="70" y="406" width="1040" height="50" rx="12" fill="#1f2937"/>
+  <rect x="70" y="470" width="1040" height="50" rx="12" fill="#1f2937"/>
+  <rect x="70" y="534" width="1040" height="50" rx="12" fill="#1f2937"/>
+  <text x="90" y="440" fill="#cbd5e1" font-family="Arial" font-size="20" font-weight="800">B021</text>
+  <text x="90" y="504" fill="#cbd5e1" font-family="Arial" font-size="20" font-weight="800">C015</text>
+  <text x="90" y="568" fill="#cbd5e1" font-family="Arial" font-size="20" font-weight="800">A108</text>
+  <text x="1070" y="440" fill="#94a3b8" font-family="Arial" font-size="16" font-weight="700" text-anchor="end">Counter 1</text>
+  <text x="1070" y="504" fill="#94a3b8" font-family="Arial" font-size="16" font-weight="700" text-anchor="end">Counter 2</text>
+  <text x="1070" y="568" fill="#94a3b8" font-family="Arial" font-size="16" font-weight="700" text-anchor="end">Counter 4</text>
+</svg>

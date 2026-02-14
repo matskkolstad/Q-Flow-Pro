@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="675" viewBox="0 0 1200 675" fill="none">
+  <rect width="1200" height="675" rx="24" fill="#0b1222"/>
+  <rect x="160" y="60" width="880" height="555" rx="32" fill="#111827" stroke="#1e293b" stroke-width="2"/>
+  <text x="600" y="150" fill="#e2e8f0" font-family="Arial" font-size="32" font-weight="900" text-anchor="middle">Take a Ticket</text>
+  <text x="600" y="190" fill="#94a3b8" font-family="Arial" font-size="18" text-anchor="middle">Choose a service below</text>
+  <rect x="250" y="240" width="300" height="120" rx="24" fill="#2563eb"/>
+  <text x="400" y="300" fill="#f8fafc" font-family="Arial" font-size="24" font-weight="800" text-anchor="middle">Customer Service</text>
+  <rect x="650" y="240" width="300" height="120" rx="24" fill="#22c55e"/>
+  <text x="800" y="300" fill="#0b1222" font-family="Arial" font-size="24" font-weight="800" text-anchor="middle">Technical</text>
+  <rect x="250" y="400" width="300" height="120" rx="24" fill="#f97316"/>
+  <text x="400" y="460" fill="#0b1222" font-family="Arial" font-size="24" font-weight="800" text-anchor="middle">Returns</text>
+  <rect x="650" y="400" width="300" height="120" rx="24" fill="#a855f7"/>
+  <text x="800" y="460" fill="#0b1222" font-family="Arial" font-size="24" font-weight="800" text-anchor="middle">VIP</text>
+</svg>

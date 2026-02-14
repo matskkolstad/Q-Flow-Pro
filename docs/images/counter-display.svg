@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="675" viewBox="0 0 1200 675" fill="none">
+  <rect width="1200" height="675" rx="24" fill="#0f172a"/>
+  <text x="60" y="90" fill="#a5b4fc" font-family="Arial" font-size="22" font-weight="800">Counter Screen</text>
+  <text x="60" y="128" fill="#cbd5e1" font-family="Arial" font-size="16">Assigned: Counter 2</text>
+  <rect x="60" y="160" width="1080" height="420" rx="24" fill="#111827" stroke="#1e293b" stroke-width="2"/>
+  <text x="600" y="300" fill="#e2e8f0" font-family="Arial" font-size="80" font-weight="900" text-anchor="middle">A107</text>
+  <text x="600" y="360" fill="#94a3b8" font-family="Arial" font-size="24" font-weight="700" text-anchor="middle">Please proceed to Counter 2</text>
+  <rect x="480" y="400" width="240" height="60" rx="18" fill="#10b981"/>
+  <text x="600" y="440" fill="#0b1222" font-family="Arial" font-size="20" font-weight="800" text-anchor="middle">Now Serving</text>
+  <rect x="60" y="600" width="200" height="34" rx="10" fill="#1f2937"/>
+  <text x="74" y="624" fill="#94a3b8" font-family="Arial" font-size="14">ID: CD-2F91</text>
+</svg>
