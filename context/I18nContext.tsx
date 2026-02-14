@@ -42,6 +42,16 @@ const translations: Translations = {
     'home.card.counter.desc': 'Screen above a counter for assigned numbers.',
     'home.footer': 'Built for efficient queue management.',
 
+    // Login
+    'login.title': 'Sign in',
+    'login.subtitle': 'Access operator and admin tools.',
+    'login.username': 'Username',
+    'login.password': 'Password',
+    'login.submit': 'Sign in',
+    'login.submitting': 'Signing in...',
+    'login.error': 'Wrong username or password',
+    'login.back': 'Back to home',
+
     // Kiosk
     'kiosk.printing': 'Printing…',
     'kiosk.printingTicket': 'Printing ticket…',
@@ -308,6 +318,16 @@ const translations: Translations = {
     'home.card.counter.title': 'Skrankeskjerm',
     'home.card.counter.desc': 'Skjerm over skranke for tildelt nummer.',
     'home.footer': 'Utviklet for effektiv køhåndtering.',
+
+    // Login
+    'login.title': 'Logg inn',
+    'login.subtitle': 'Tilgang til operatør- og adminverktøy.',
+    'login.username': 'Brukernavn',
+    'login.password': 'Passord',
+    'login.submit': 'Logg inn',
+    'login.submitting': 'Logger inn...',
+    'login.error': 'Feil brukernavn eller passord',
+    'login.back': 'Tilbake til forsiden',
 
     // Kiosk
     'kiosk.printing': 'Skriver ut…',
