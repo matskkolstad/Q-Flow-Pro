@@ -35,11 +35,11 @@
 - Server owns state/logging; clients receive `init-state` + `state-update` events.
 
 ## Screenshots
-- Admin dashboard: ![Admin Dashboard](docs/images/admin-dashboard.svg)
-- Public display: ![Public Display](docs/images/public-display.svg)
-- Counter display: ![Counter Display](docs/images/counter-display.svg)
-- Kiosk: ![Kiosk](docs/images/kiosk.svg)
-- Mobile client: ![Mobile Client](docs/images/mobile-client.svg)
+- Admin dashboard: ![Admin Dashboard](docs/images/overview.png)
+- Public display: ![Public Display](docs/images/big-screen.png)
+- Counter display: ![Counter Display](docs/images/counter-screen.png)
+- Kiosk: ![Kiosk](docs/images/kiosk-draw.png)
+- Mobile client: ![Mobile Client](docs/images/mobile.png)
 
 ## Requirements
 - Node.js 18+ (LTS recommended)
