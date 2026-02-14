@@ -15,9 +15,8 @@ export const Logo: React.FC<LogoProps> = ({
   brandLogoUrl,
 }) => {
   const fallbackText = 'Q-Flow Pro';
-  const normalized = typeof brandText === 'string' ? brandText.trim() : brandText;
-  const explicitEmpty = brandText !== undefined && brandText !== null && normalized === '';
-  const effectiveText = explicitEmpty ? '' : (normalized || fallbackText);
+  const normalized = typeof brandText === 'string' ? brandText.trim() : '';
+  const effectiveText = normalized || fallbackText;
   const altText = effectiveText || fallbackText;
   const showText = effectiveText.length > 0;
   const useDefaultStyle = showText && effectiveText === fallbackText;

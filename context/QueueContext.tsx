@@ -2,6 +2,7 @@ import React, { createContext, useContext, useState, useEffect, ReactNode, useRe
 import { io, Socket } from 'socket.io-client';
 import { Ticket, Service, Counter, LogEntry, QueueContextType, TicketStatus, User, Printer, KioskConfig, SoundSettings, CounterDisplay, BrandingConfig } from '../types';
 import { audioService } from '../services/audioService';
+import { useI18n } from './I18nContext';
 
 const QueueContext = createContext<QueueContextType | undefined>(undefined);
 
@@ -33,6 +34,7 @@ const socket: Socket = io(socketBase, {
 });
 
 export const QueueProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
+    const { language } = useI18n();
   // Initial empty state (will be populated by server)
   const [services, setServices] = useState<Service[]>([]);
   const [counters, setCounters] = useState<Counter[]>([]);
@@ -53,8 +55,13 @@ export const QueueProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         callVoice: true
     });
     const soundSettingsRef = useRef<SoundSettings>(soundSettings);
+    const languageRef = useRef<'en' | 'no'>(language);
     const [isConnected, setIsConnected] = useState(socket.connected);
         const [lastError, setLastError] = useState<string>('');
+
+    useEffect(() => {
+        languageRef.current = language;
+    }, [language]);
 
     const applyState = (state: any = {}) => {
         // Fallbacks ensure UI keeps rendering even if backend sends partial data
@@ -167,21 +174,28 @@ export const QueueProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         window.addEventListener('qflow-auth-changed', onAuthChanged as EventListener);
         window.addEventListener('storage', onStorage);
 
-    socket.on('play-sound', (data: { type: 'ding'|'print'|'alert', text?: string }) => {
-        // Only the public display should play call sounds
-        const isDisplay = (() => {
+    socket.on('play-sound', (data: { type: 'ding'|'print'|'alert', text?: string, textNo?: string, textEn?: string }) => {
+        // Public displays and admin/operator panels should react to call sounds
+        const shouldHandle = (() => {
             if (typeof window === 'undefined') return false;
             const hash = window.location.hash.toLowerCase();
             const path = window.location.pathname.toLowerCase();
             const role = localStorage.getItem('qflow_client_role');
-            return role === 'display' || hash.includes('display') || path.endsWith('/display');
+            const isDisplay = role === 'display' || hash.includes('display') || path.includes('display');
+            const isAdminPanel = role === 'admin' || hash.includes('admin') || path.includes('admin');
+            return isDisplay || isAdminPanel;
         })();
-        if (!isDisplay) return;
+        if (!shouldHandle) return;
 
         const s = soundSettingsRef.current;
-        if (data.text) {
+        const lang = languageRef.current || 'no';
+        const voiceText = lang === 'en'
+            ? data.textEn || data.text || data.textNo
+            : data.textNo || data.text || data.textEn;
+
+        if (voiceText) {
             if (s.callVoice) {
-                audioService.announce(data.text);
+                audioService.announce(voiceText, lang);
             } else if (s.callChime) {
                 audioService.playEffect('ding');
             }

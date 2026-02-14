@@ -7,6 +7,8 @@ class AudioService {
 
   constructor() {
     this.synth = window.speechSynthesis;
+    // Prime voices immediately (some browsers need an initial call)
+    this.voices = this.synth.getVoices();
     if (speechSynthesis.onvoiceschanged !== undefined) {
       speechSynthesis.onvoiceschanged = () => {
         this.voices = this.synth.getVoices();
@@ -44,7 +46,7 @@ class AudioService {
     });
   }
 
-  async announce(text: string) {
+  async announce(text: string, language: 'en' | 'no' = 'no') {
     await this.unlock();
     if (this.synth.speaking) {
       this.synth.cancel();
@@ -55,18 +57,48 @@ class AudioService {
 
     // 2. Then Speak
     const utterThis = new SpeechSynthesisUtterance(text);
-    
-    // Prefer Norwegian Google voice or generic Norwegian
-    const norwegianVoice = this.voices.find(v => v.name.includes('Google') && v.lang.includes('no')) ||
-                           this.voices.find(v => v.lang === 'no-NO') || 
-                           this.voices.find(v => v.lang === 'nb-NO');
-    
-    if (norwegianVoice) {
-      utterThis.voice = norwegianVoice;
+
+    // Prefer language-appropriate voice; bias to natural-sounding variants
+    const preferredNames = ['google', 'natural', 'aria', 'jenny', 'guy', 'samantha', 'karen', 'daniel', 'emma'];
+    const scoreVoice = (voice: SpeechSynthesisVoice, langs: string[]) => {
+      const lang = (voice.lang || '').toLowerCase();
+      let score = 0;
+      if (langs.some(l => lang.startsWith(l))) score += 5;
+      if (lang.includes('en-gb')) score += 2;
+      if (lang.includes('en-us')) score += 2;
+      if (lang.includes('nb') || lang.includes('no') || lang.includes('nn')) score += 2;
+      const name = (voice.name || '').toLowerCase();
+      if (preferredNames.some(p => name.includes(p))) score += 3;
+      if (name.includes('google')) score += 2;
+      if (name.includes('microsoft')) score += 1;
+      return score;
+    };
+
+    const pickBest = (langs: string[]) => {
+      return this.voices
+        .map(v => ({ v, s: scoreVoice(v, langs) }))
+        .sort((a, b) => b.s - a.s)
+        .find(entry => entry.s > 0)?.v;
+    };
+
+    const voice = language === 'en'
+      ? pickBest(['en-gb', 'en-us', 'en']) || pickBest(['nb-no', 'no-no', 'nb', 'nn', 'no'])
+      : pickBest(['nb-no', 'no-no', 'nb', 'nn', 'no']) || pickBest(['en-gb', 'en-us', 'en']);
+
+    if (voice) {
+      utterThis.voice = voice;
     }
 
-    utterThis.rate = 0.9; 
-    utterThis.pitch = 1.0;
+    utterThis.lang = language === 'en' ? 'en-GB' : 'nb-NO';
+
+    // Softer tuning; slightly deeper for English
+    if (language === 'en') {
+      utterThis.rate = 0.95;
+      utterThis.pitch = 0.98;
+    } else {
+      utterThis.rate = 0.95;
+      utterThis.pitch = 1.05;
+    }
     utterThis.volume = 1.0;
     
     this.synth.speak(utterThis);

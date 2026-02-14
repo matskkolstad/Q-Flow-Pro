@@ -4,6 +4,7 @@ import { Monitor, Smartphone, Users, LayoutGrid, Tv, ShieldCheck, LogIn } from '
 import { Logo } from '../components/Logo';
 import { useQueue } from '../context/QueueContext';
 import { useAuth } from '../context/AuthContext';
+import { useI18n } from '../context/I18nContext';
 
 const ModeCard: React.FC<{ to: string; title: string; desc: string; icon: React.ReactNode; color: string }> = ({ to, title, desc, icon, color }) => (
   <Link to={to} className="group relative overflow-hidden bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-xl hover:border-indigo-100 transition-all duration-300">
@@ -20,6 +21,7 @@ const Home: React.FC = () => {
   const { branding } = useQueue();
   const { user, logout } = useAuth();
   const navigate = useNavigate();
+  const { t } = useI18n();
   const isAdmin = user?.role === 'ADMIN';
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center p-6">
@@ -27,26 +29,26 @@ const Home: React.FC = () => {
         <div className="flex justify-center mb-6">
            <Logo className="h-12 w-12" textClass="text-4xl" brandText={branding.brandText} brandLogoUrl={branding.brandLogoUrl} />
         </div>
-        <h1 className="text-3xl font-bold text-gray-900 mb-2">Velkommen</h1>
+        <h1 className="text-3xl font-bold text-gray-900 mb-2">{t('home.title')}</h1>
         <p className="text-gray-500 max-w-md mx-auto">
-          Logg inn for å styre køen. Offentlige visninger er tilgjengelig uten innlogging.
+          {t('home.subtitle')}
         </p>
         <div className="mt-4 flex items-center justify-center gap-3 text-sm text-gray-600">
           {user ? (
             <>
               <span className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-100">
-                <ShieldCheck size={16} /> {user.name} · {user.role === 'ADMIN' ? 'Admin' : 'Operatør'}
+                <ShieldCheck size={16} /> {user.name} · {user.role === 'ADMIN' ? t('role.admin') : t('role.operator')}
               </span>
               <button
                 onClick={() => logout().then(() => navigate('/login'))}
                 className="text-indigo-600 hover:text-indigo-700 font-medium"
               >
-                Logg ut
+                {t('common.logout')}
               </button>
             </>
           ) : (
             <span className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-gray-100 text-gray-700 border border-gray-200">
-              <LogIn size={16} /> Ikke innlogget
+              <LogIn size={16} /> {t('common.notLoggedIn')}
             </span>
           )}
         </div>
@@ -56,8 +58,8 @@ const Home: React.FC = () => {
         {!user && (
           <ModeCard 
             to="/login" 
-            title="Logg inn" 
-            desc="Få tilgang til operatør- og adminverktøy." 
+            title={t('home.card.login.title')} 
+            desc={t('home.card.login.desc')} 
             icon={<LogIn size={24} />} 
             color="bg-slate-700"
           />
@@ -66,8 +68,8 @@ const Home: React.FC = () => {
         {isAdmin && (
           <ModeCard 
             to="/kiosk" 
-            title="Kiosk / Trekking" 
-            desc="Touch-skjerm for å trekke kølapper." 
+            title={t('home.card.kiosk.title')} 
+            desc={t('home.card.kiosk.desc')} 
             icon={<Smartphone size={24} />} 
             color="bg-blue-600"
           />
@@ -75,8 +77,8 @@ const Home: React.FC = () => {
 
         <ModeCard 
           to="/display" 
-          title="Storskjerm" 
-          desc="Visning av nåværende køstatus." 
+          title={t('home.card.display.title')} 
+          desc={t('home.card.display.desc')} 
           icon={<Monitor size={24} />} 
           color="bg-purple-600"
         />
@@ -84,8 +86,8 @@ const Home: React.FC = () => {
         {user && (
           <ModeCard 
             to="/admin" 
-            title="Operatør / Admin" 
-            desc="Administrer køer og kall inn neste." 
+            title={t('home.card.admin.title')} 
+            desc={t('home.card.admin.desc')} 
             icon={<LayoutGrid size={24} />} 
             color="bg-emerald-600"
           />
@@ -93,23 +95,23 @@ const Home: React.FC = () => {
 
         <ModeCard 
           to="/mobile/new" 
-          title="Mobilbruker" 
-          desc="Simuler en bruker på mobil." 
+          title={t('home.card.mobile.title')} 
+          desc={t('home.card.mobile.desc')} 
           icon={<Users size={24} />} 
           color="bg-orange-500"
         />
 
         <ModeCard 
           to="/counter-display" 
-          title="Skrankeskjerm" 
-          desc="Skjerm over skranke for tildelt nummer." 
+          title={t('home.card.counter.title')} 
+          desc={t('home.card.counter.desc')} 
           icon={<Tv size={24} />} 
           color="bg-indigo-700"
         />
       </div>
       
       <div className="mt-12 text-sm text-gray-400">
-        &copy; {new Date().getFullYear()} Q-Flow Pro. Utviklet for effektiv køhåndtering.
+        &copy; {new Date().getFullYear()} Q-Flow Pro. {t('home.footer')}
       </div>
     </div>
   );

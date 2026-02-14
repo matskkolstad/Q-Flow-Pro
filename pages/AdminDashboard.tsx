@@ -5,6 +5,7 @@ import { Logo } from '../components/Logo';
 import { Users, Clock, Trash2, Bell, CheckCircle, Mic, Settings, List, X, Play, Download, Printer as PrinterIcon, Monitor, Shield, Lock, Terminal } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { useI18n, SupportedLanguage } from '../context/I18nContext';
 
 type SettingsTab = 'general' | 'services' | 'counters' | 'users' | 'devices';
 type ViewTab = 'dashboard' | 'logs' | 'settings';
@@ -18,9 +19,19 @@ const AdminDashboard: React.FC = () => {
         resetSystem, updateCounterStatus
         } = useQueue();
     const { user, token, logout } = useAuth();
+    const { language, setLanguage, t } = useI18n();
     const navigate = useNavigate();
     const isOperator = user?.role === 'OPERATOR';
     const isAdmin = user?.role === 'ADMIN';
+
+    // Mark this client so QueueContext knows it may play sounds
+    useEffect(() => {
+        localStorage.setItem('qflow_client_role', 'admin');
+        return () => {
+            const role = localStorage.getItem('qflow_client_role');
+            if (role === 'admin') localStorage.removeItem('qflow_client_role');
+        };
+    }, []);
 
     const [activeCounterId, setActiveCounterId] = useState<string>(counters[0]?.id || '');
 
@@ -141,7 +152,11 @@ const AdminDashboard: React.FC = () => {
   };
 
   const handleExportCSV = () => {
-    const headers = ['Tidspunkt', 'Type', 'Melding'];
+        const headers = [
+                t('admin.logs.table.time'),
+                t('admin.logs.table.type'),
+                t('admin.logs.table.message')
+        ];
     const rows = logs.map(log => [
         new Date(log.timestamp).toLocaleString(),
         log.type,
@@ -220,7 +235,7 @@ const AdminDashboard: React.FC = () => {
             setPwdNew('');
         } catch (err) {
             setPwdStatus('error');
-            reportError('Kunne ikke oppdatere passord');
+            reportError(t('admin.general.password.error'));
         } finally {
             setTimeout(() => setPwdStatus('idle'), 2500);
         }
@@ -240,8 +255,8 @@ const AdminDashboard: React.FC = () => {
             setBackups(Array.isArray(data?.backups) ? data.backups : []);
         } catch (err) {
             setBackupStatus('error');
-            setBackupMessage('Kunne ikke hente backup-liste');
-            reportError('Kunne ikke hente backup-liste');
+            setBackupMessage(t('admin.general.backup.fetchError'));
+            reportError(t('admin.general.backup.fetchError'));
         } finally {
             setBackupsLoading(false);
         }
@@ -250,7 +265,7 @@ const AdminDashboard: React.FC = () => {
     const handleCreateBackup = async () => {
         if (!token) return;
         setBackupStatus('working');
-        setBackupMessage('Oppretter backup...');
+        setBackupMessage(t('admin.general.backup.creating'));
         try {
             const res = await fetch('/api/admin/backup', {
                 method: 'POST',
@@ -261,12 +276,12 @@ const AdminDashboard: React.FC = () => {
             if (!res.ok) throw new Error('failed');
             const data = await res.json();
             setBackupStatus('success');
-            setBackupMessage(data?.file ? `Backup laget: ${data.file}` : 'Backup fullført');
+            setBackupMessage(data?.file ? t('admin.general.backup.createdWithFile', { file: data.file }) : t('admin.general.backup.created'));
             await fetchBackups();
         } catch (err) {
             setBackupStatus('error');
-            setBackupMessage('Backup feilet');
-            reportError('Backup feilet');
+            setBackupMessage(t('admin.general.backup.failed'));
+            reportError(t('admin.general.backup.failed'));
         }
     };
 
@@ -289,11 +304,11 @@ const AdminDashboard: React.FC = () => {
             link.remove();
             window.URL.revokeObjectURL(url);
             setBackupStatus('success');
-            setBackupMessage(`Lastet ned ${file}`);
+            setBackupMessage(t('admin.general.backup.downloaded', { file }));
         } catch (err) {
             setBackupStatus('error');
-            setBackupMessage('Kunne ikke laste ned backup');
-            reportError('Kunne ikke laste ned backup');
+            setBackupMessage(t('admin.general.backup.downloadError'));
+            reportError(t('admin.general.backup.downloadError'));
         }
     };
 
@@ -325,7 +340,7 @@ const AdminDashboard: React.FC = () => {
         const draft = getUserDraft(id);
         const current = users.find(u => u.id === id);
         if (current?.role === 'ADMIN' && adminCount <= 1 && draft.role !== 'ADMIN') {
-            alert('Det må være minst én admin. Du kan ikke nedgradere siste admin.');
+            alert(t('admin.users.cannotDemoteAdmin'));
             return;
         }
         const payload: any = {
@@ -348,33 +363,44 @@ const AdminDashboard: React.FC = () => {
             </Link>
             <nav className="hidden md:flex gap-2 bg-gray-100 p-1.5 rounded-xl">
                 <button onClick={() => setView('dashboard')} className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-bold transition-all ${view === 'dashboard' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-500 hover:text-gray-900'}`}>
-                    <List size={18}/> Oversikt
+                    <List size={18}/> {t('admin.nav.dashboard')}
                 </button>
                 <button onClick={() => setView('logs')} className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-bold transition-all ${view === 'logs' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-500 hover:text-gray-900'}`}>
-                    <Clock size={18}/> Logg
+                    <Clock size={18}/> {t('admin.nav.logs')}
                 </button>
                 <button onClick={() => setView('settings')} className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-bold transition-all ${view === 'settings' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-500 hover:text-gray-900'} ${!isAdmin ? 'opacity-60 cursor-not-allowed' : ''}`} disabled={!isAdmin}>
-                    <Settings size={18}/> Innstillinger
+                    <Settings size={18}/> {t('admin.nav.settings')}
                 </button>
             </nav>
         </div>
         <div className="flex items-center gap-4">
             <div className="flex items-center gap-3 bg-white px-4 py-2 rounded-lg border border-gray-200 shadow-sm">
-                <span className="text-xs text-gray-500 uppercase font-bold tracking-wider">Skranke</span>
+                <span className="text-xs text-gray-500 uppercase font-bold tracking-wider">{t('admin.header.counter')}</span>
                 <select 
                     value={activeCounterId} 
                     onChange={(e) => setActiveCounterId(e.target.value)}
                     className="bg-transparent text-sm font-bold text-gray-800 focus:outline-none cursor-pointer"
                 >
-                    {counters.length === 0 && <option value="">Ingen skranker</option>}
+                    {counters.length === 0 && <option value="">{t('admin.header.noCounters')}</option>}
                     {counters.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                 </select>
                 <div className={`h-2.5 w-2.5 rounded-full ${currentCounter?.isOnline ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`}></div>
             </div>
+            <div className="flex items-center gap-2 bg-white px-3 py-2 rounded-lg border border-gray-200 shadow-sm">
+                <span className="text-xs text-gray-500 uppercase font-bold tracking-wider">{t('common.language')}</span>
+                <select
+                    value={language}
+                    onChange={(e) => setLanguage(e.target.value as SupportedLanguage)}
+                    className="bg-transparent text-sm font-bold text-gray-800 focus:outline-none cursor-pointer"
+                >
+                    <option value="en">{t('common.language.english')}</option>
+                    <option value="no">{t('common.language.norwegian')}</option>
+                </select>
+            </div>
             <div className="flex items-center gap-2 text-sm text-gray-600">
-                {user && <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full bg-gray-100 text-gray-700 border border-gray-200"><Shield size={14}/> {user.name} · {user.role}</span>}
-                <button onClick={() => logout().then(() => navigate('/login'))} className="flex items-center gap-2 text-sm font-bold text-red-600 hover:text-red-700 px-3 py-2 bg-red-50 hover:bg-red-100 rounded-lg" title="Logg ut">
-                    <X size={18} /> Logg ut
+                {user && <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full bg-gray-100 text-gray-700 border border-gray-200"><Shield size={14}/> {user.name} · {user.role === 'ADMIN' ? t('role.admin') : t('role.operator')}</span>}
+                <button onClick={() => logout().then(() => navigate('/login'))} className="flex items-center gap-2 text-sm font-bold text-red-600 hover:text-red-700 px-3 py-2 bg-red-50 hover:bg-red-100 rounded-lg" title={t('admin.header.logout')}>
+                    <X size={18} /> {t('admin.header.logout')}
                 </button>
             </div>
         </div>
@@ -396,7 +422,7 @@ const AdminDashboard: React.FC = () => {
                              <div className="text-center w-full z-10 animate-in fade-in zoom-in duration-300">
                                 <span className="inline-flex items-center gap-2 px-5 py-2 rounded-full bg-green-100 text-green-700 font-bold text-sm mb-8 border border-green-200">
                                     <span className="w-2 h-2 rounded-full bg-green-600 animate-pulse"></span>
-                                    Nå betjenes
+                                    {t('admin.dashboard.nowServing')}
                                 </span>
                                 <div className="text-[10rem] leading-none font-black text-gray-900 mb-2 tracking-tighter">
                                     {tickets.find(t => t.id === currentCounter.currentTicketId)?.number}
@@ -409,17 +435,17 @@ const AdminDashboard: React.FC = () => {
                                         onClick={() => {
                                         const num = tickets.find(t => t.id === currentCounter.currentTicketId)?.number;
                                         if (!num) return;
-                                        triggerSound({ type: 'ding', text: `Nummer ${num}, til ${currentCounter.name}` });
+                                        triggerSound({ type: 'ding', text: t('admin.dashboard.voiceCall', { number: num, counter: currentCounter.name }) });
                                         }}
                                         className="flex items-center gap-2 px-8 py-5 bg-gray-100 hover:bg-gray-200 text-gray-800 rounded-2xl font-bold transition-all active:scale-95 text-lg"
                                     >
-                                        <Bell size={24} /> Kall igjen
+                                        <Bell size={24} /> {t('admin.dashboard.callAgain')}
                                     </button>
                                     <button 
                                         onClick={handleComplete}
                                         className="flex items-center gap-2 px-10 py-5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl font-bold shadow-xl shadow-indigo-200 transition-all hover:-translate-y-1 active:scale-95 text-lg"
                                     >
-                                        <CheckCircle size={24} /> Fullfør sak
+                                        <CheckCircle size={24} /> {t('admin.dashboard.complete')}
                                     </button>
                                 </div>
                              </div>
@@ -428,14 +454,14 @@ const AdminDashboard: React.FC = () => {
                                 <div className="w-28 h-28 bg-gray-50 rounded-full flex items-center justify-center mx-auto mb-8 text-indigo-200 border-4 border-white shadow-lg">
                                     <Users size={56} />
                                 </div>
-                                <h2 className="text-4xl font-black text-gray-900 mb-3 tracking-tight">Klar for neste?</h2>
-                                <p className="text-gray-500 mb-10 max-w-sm mx-auto text-lg">Det er totalt <strong className="text-gray-900">{waitingTickets.length}</strong> personer som venter.</p>
+                                <h2 className="text-4xl font-black text-gray-900 mb-3 tracking-tight">{t('admin.dashboard.ready')}</h2>
+                                <p className="text-gray-500 mb-10 max-w-sm mx-auto text-lg">{t('admin.dashboard.waiting', { count: waitingTickets.length })}</p>
                                 <button 
                                     onClick={() => callNextTicket(activeCounterId)}
                                     disabled={waitingTickets.length === 0}
                                     className="px-12 py-6 bg-emerald-500 hover:bg-emerald-600 disabled:bg-gray-200 disabled:text-gray-400 disabled:cursor-not-allowed text-white rounded-2xl font-black text-2xl shadow-xl shadow-emerald-200 transition-all hover:-translate-y-1 active:scale-95 flex items-center gap-4 mx-auto"
                                 >
-                                    <Play fill="currentColor" size={24} /> Kall inn neste
+                                    <Play fill="currentColor" size={24} /> {t('admin.dashboard.callNext')}
                                 </button>
                             </div>
                         )}
@@ -444,19 +470,19 @@ const AdminDashboard: React.FC = () => {
                     {/* Stats Grid */}
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                         <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-200">
-                            <div className="text-gray-400 text-xs font-bold uppercase tracking-wider mb-2">I kø</div>
+                            <div className="text-gray-400 text-xs font-bold uppercase tracking-wider mb-2">{t('admin.dashboard.stats.waiting')}</div>
                             <div className="text-4xl font-black text-gray-900">{waitingTickets.length}</div>
                         </div>
                         <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-200">
-                            <div className="text-gray-400 text-xs font-bold uppercase tracking-wider mb-2">Ventetid</div>
+                            <div className="text-gray-400 text-xs font-bold uppercase tracking-wider mb-2">{t('admin.dashboard.stats.waitTime')}</div>
                             <div className="text-4xl font-black text-gray-900">~{avgWaitTime} <span className="text-sm text-gray-400 font-normal">min</span></div>
                         </div>
                         <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-200">
-                            <div className="text-gray-400 text-xs font-bold uppercase tracking-wider mb-2">Totalt i dag</div>
+                            <div className="text-gray-400 text-xs font-bold uppercase tracking-wider mb-2">{t('admin.dashboard.stats.total')}</div>
                             <div className="text-4xl font-black text-gray-900">{totalServed}</div>
                         </div>
                          <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-200">
-                            <div className="text-gray-400 text-xs font-bold uppercase tracking-wider mb-2">Online</div>
+                            <div className="text-gray-400 text-xs font-bold uppercase tracking-wider mb-2">{t('admin.dashboard.stats.online')}</div>
                             <div className="text-4xl font-black text-green-500">{counters.filter(c => c.isOnline).length}/{counters.length}</div>
                         </div>
                     </div>
@@ -465,14 +491,14 @@ const AdminDashboard: React.FC = () => {
                 {/* Waiting List Column */}
                 <div className="bg-white rounded-[2rem] shadow-sm border border-gray-200 flex flex-col h-[calc(100vh-140px)] sticky top-6 overflow-hidden">
                     <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-gray-50/80 backdrop-blur-sm">
-                        <h3 className="font-bold text-gray-900 text-xl">Kø-oversikt</h3>
+                        <h3 className="font-bold text-gray-900 text-xl">{t('admin.queue.title')}</h3>
                         <span className="bg-gray-200 text-gray-700 px-3 py-1 rounded-full text-sm font-bold">{waitingTickets.length}</span>
                     </div>
                     <div className="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar">
                         {waitingTickets.length === 0 ? (
                             <div className="flex flex-col items-center justify-center h-64 text-gray-400 opacity-60">
                                 <Clock size={48} className="mb-4 text-gray-300"/>
-                                <p className="font-medium">Ingen ventende kunder</p>
+                                <p className="font-medium">{t('admin.queue.empty')}</p>
                             </div>
                         ) : (
                             waitingTickets.map((ticket) => {
@@ -493,12 +519,12 @@ const AdminDashboard: React.FC = () => {
                                                 onClick={() => callSpecificTicket(ticket.id, activeCounterId)}
                                                 className="px-4 py-2 bg-indigo-50 text-indigo-700 border border-indigo-100 rounded-lg text-xs font-bold hover:bg-indigo-600 hover:text-white transition-all shadow-sm"
                                              >
-                                                Hent
+                                                    {t('admin.queue.call')}
                                              </button>
                                             <button 
                                                 onClick={() => deleteTicket(ticket.id)}
-                                                className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all" 
-                                                title="Slett fra kø"
+                                                    className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all" 
+                                                    title={t('admin.queue.deleteTitle')}
                                             >
                                                 <Trash2 size={18} />
                                             </button>
@@ -515,9 +541,9 @@ const AdminDashboard: React.FC = () => {
         {view === 'logs' && (
             <div className="bg-white rounded-3xl shadow-sm border border-gray-200 overflow-hidden">
                 <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-gray-50/50">
-                    <h3 className="font-bold text-gray-900 text-xl">Systemlogg</h3>
+                    <h3 className="font-bold text-gray-900 text-xl">{t('admin.logs.title')}</h3>
                     <button onClick={handleExportCSV} className="flex items-center gap-2 text-sm text-indigo-600 hover:text-indigo-800 font-bold bg-indigo-50 px-3 py-1.5 rounded-lg hover:bg-indigo-100 transition-colors">
-                        <Download size={16} /> Eksporter CSV
+                        <Download size={16} /> {t('admin.logs.export')}
                     </button>
                 </div>
                 {isAdmin && (
@@ -528,17 +554,17 @@ const AdminDashboard: React.FC = () => {
                                     <Terminal size={18} />
                                 </div>
                                 <div>
-                                    <p className="font-bold text-gray-900">Live logg (admin)</p>
-                                    <p className="text-xs text-gray-500">Sanntidsovervåkning av alle hendelser</p>
+                                    <p className="font-bold text-gray-900">{t('admin.logs.live')}</p>
+                                    <p className="text-xs text-gray-500">{t('admin.logs.liveDesc')}</p>
                                 </div>
                             </div>
                             <div className="flex items-center gap-2">
-                                <span className="text-xs font-mono text-gray-500">{logs.length} linjer</span>
+                                <span className="text-xs font-mono text-gray-500">{t('admin.logs.lines', { count: logs.length })}</span>
                                 <button
                                     onClick={() => setFollowLog((prev) => !prev)}
                                     className={`px-3 py-1.5 text-xs font-bold rounded-lg border transition-colors ${followLog ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm' : 'bg-white text-gray-700 border-gray-200 hover:border-gray-300'}`}
                                 >
-                                    {followLog ? 'Pause autoscroll' : 'Følg sanntid'}
+                                    {followLog ? t('admin.logs.pause') : t('admin.logs.follow')}
                                 </button>
                             </div>
                         </div>
@@ -548,7 +574,7 @@ const AdminDashboard: React.FC = () => {
                                 className="h-[320px] overflow-y-auto p-4 space-y-2 custom-scrollbar"
                             >
                                 {logs.length === 0 && (
-                                    <div className="text-sm text-slate-400 font-mono">Ingen hendelser ennå.</div>
+                                    <div className="text-sm text-slate-400 font-mono">{t('admin.logs.empty')}</div>
                                 )}
                                 {logs.map((log) => {
                                     const time = new Date(log.timestamp).toLocaleTimeString('no-NO');
@@ -572,9 +598,9 @@ const AdminDashboard: React.FC = () => {
                 <table className="w-full">
                     <thead className="bg-gray-50 text-left border-b border-gray-200">
                         <tr>
-                            <th className="px-6 py-4 text-xs font-black text-gray-500 uppercase tracking-wider">Tidspunkt</th>
-                            <th className="px-6 py-4 text-xs font-black text-gray-500 uppercase tracking-wider">Type</th>
-                            <th className="px-6 py-4 text-xs font-black text-gray-500 uppercase tracking-wider">Melding</th>
+                            <th className="px-6 py-4 text-xs font-black text-gray-500 uppercase tracking-wider">{t('admin.logs.table.time')}</th>
+                            <th className="px-6 py-4 text-xs font-black text-gray-500 uppercase tracking-wider">{t('admin.logs.table.type')}</th>
+                            <th className="px-6 py-4 text-xs font-black text-gray-500 uppercase tracking-wider">{t('admin.logs.table.message')}</th>
                         </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100">
@@ -606,13 +632,13 @@ const AdminDashboard: React.FC = () => {
              <div className="bg-white rounded-[2rem] shadow-sm border border-gray-200 overflow-hidden flex flex-col md:flex-row min-h-[600px]">
                 {/* Settings Sidebar */}
                 <div className="w-full md:w-64 bg-gray-50 border-r border-gray-200 p-6">
-                    <h2 className="text-xs font-black text-gray-400 uppercase tracking-wider mb-6 px-2">Konfigurasjon</h2>
+                    <h2 className="text-xs font-black text-gray-400 uppercase tracking-wider mb-6 px-2">{t('admin.settings.title')}</h2>
                     <div className="space-y-2">
-                        {allowedSettingsTabs.includes('general') && <button onClick={() => setSettingsTab('general')} className={`w-full text-left px-4 py-3 rounded-xl text-sm font-bold transition-all ${settingsTab === 'general' ? 'bg-white text-indigo-700 shadow-md ring-1 ring-black/5' : 'text-gray-600 hover:bg-gray-200/50'}`}>Generelt</button>}
-                        {allowedSettingsTabs.includes('services') && <button onClick={() => setSettingsTab('services')} className={`w-full text-left px-4 py-3 rounded-xl text-sm font-bold transition-all ${settingsTab === 'services' ? 'bg-white text-indigo-700 shadow-md ring-1 ring-black/5' : 'text-gray-600 hover:bg-gray-200/50'}`}>Tjenester</button>}
-                        {allowedSettingsTabs.includes('counters') && <button onClick={() => setSettingsTab('counters')} className={`w-full text-left px-4 py-3 rounded-xl text-sm font-bold transition-all ${settingsTab === 'counters' ? 'bg-white text-indigo-700 shadow-md ring-1 ring-black/5' : 'text-gray-600 hover:bg-gray-200/50'}`}>Skranker</button>}
-                        {allowedSettingsTabs.includes('users') && <button onClick={() => setSettingsTab('users')} className={`w-full text-left px-4 py-3 rounded-xl text-sm font-bold transition-all ${settingsTab === 'users' ? 'bg-white text-indigo-700 shadow-md ring-1 ring-black/5' : 'text-gray-600 hover:bg-gray-200/50'}`}>Brukere</button>}
-                        {allowedSettingsTabs.includes('devices') && <button onClick={() => setSettingsTab('devices')} className={`w-full text-left px-4 py-3 rounded-xl text-sm font-bold transition-all ${settingsTab === 'devices' ? 'bg-white text-indigo-700 shadow-md ring-1 ring-black/5' : 'text-gray-600 hover:bg-gray-200/50'}`}>Enheter</button>}
+                        {allowedSettingsTabs.includes('general') && <button onClick={() => setSettingsTab('general')} className={`w-full text-left px-4 py-3 rounded-xl text-sm font-bold transition-all ${settingsTab === 'general' ? 'bg-white text-indigo-700 shadow-md ring-1 ring-black/5' : 'text-gray-600 hover:bg-gray-200/50'}`}>{t('admin.settings.general')}</button>}
+                        {allowedSettingsTabs.includes('services') && <button onClick={() => setSettingsTab('services')} className={`w-full text-left px-4 py-3 rounded-xl text-sm font-bold transition-all ${settingsTab === 'services' ? 'bg-white text-indigo-700 shadow-md ring-1 ring-black/5' : 'text-gray-600 hover:bg-gray-200/50'}`}>{t('admin.settings.services')}</button>}
+                        {allowedSettingsTabs.includes('counters') && <button onClick={() => setSettingsTab('counters')} className={`w-full text-left px-4 py-3 rounded-xl text-sm font-bold transition-all ${settingsTab === 'counters' ? 'bg-white text-indigo-700 shadow-md ring-1 ring-black/5' : 'text-gray-600 hover:bg-gray-200/50'}`}>{t('admin.settings.counters')}</button>}
+                        {allowedSettingsTabs.includes('users') && <button onClick={() => setSettingsTab('users')} className={`w-full text-left px-4 py-3 rounded-xl text-sm font-bold transition-all ${settingsTab === 'users' ? 'bg-white text-indigo-700 shadow-md ring-1 ring-black/5' : 'text-gray-600 hover:bg-gray-200/50'}`}>{t('admin.settings.users')}</button>}
+                        {allowedSettingsTabs.includes('devices') && <button onClick={() => setSettingsTab('devices')} className={`w-full text-left px-4 py-3 rounded-xl text-sm font-bold transition-all ${settingsTab === 'devices' ? 'bg-white text-indigo-700 shadow-md ring-1 ring-black/5' : 'text-gray-600 hover:bg-gray-200/50'}`}>{t('admin.settings.devices')}</button>}
                     </div>
                 </div>
 
@@ -620,12 +646,12 @@ const AdminDashboard: React.FC = () => {
                 <div className="flex-1 p-10 bg-white">
                     {settingsTab === 'general' && (
                         <div className="max-w-2xl">
-                            <h3 className="text-3xl font-black text-gray-900 mb-8">Generelle innstillinger</h3>
+                            <h3 className="text-3xl font-black text-gray-900 mb-8">{t('admin.general.title')}</h3>
                             <div className="space-y-8">
                                 <div className="bg-white border-2 border-gray-100 rounded-2xl p-6">
-                                    <h4 className="font-bold text-gray-900 mb-4 text-lg">Profil og logo</h4>
+                                    <h4 className="font-bold text-gray-900 mb-4 text-lg">{t('admin.general.profile')}</h4>
                                     <div className="space-y-4">
-                                        <label className="block text-sm font-bold text-gray-700">Navn ved logo</label>
+                                        <label className="block text-sm font-bold text-gray-700">{t('admin.general.brandName')}</label>
                                         <input
                                             type="text"
                                             value={branding.brandText}
@@ -638,114 +664,114 @@ const AdminDashboard: React.FC = () => {
                                                     {branding.brandLogoUrl ? (
                                                         <img src={branding.brandLogoUrl} alt="Logo" className="h-full w-full object-contain" />
                                                     ) : (
-                                                        <span className="text-xs text-gray-400 font-bold">Ingen logo</span>
+                                                        <span className="text-xs text-gray-400 font-bold">{t('admin.general.noLogo')}</span>
                                                     )}
                                                 </div>
-                                                <div className="text-xs text-gray-500">Vises på alle skjermer</div>
+                                                <div className="text-xs text-gray-500">{t('admin.general.logoHelp')}</div>
                                             </div>
                                             <div className="flex gap-2">
                                                 <label className="px-4 py-2 bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-lg text-sm font-bold cursor-pointer hover:bg-indigo-100">
-                                                    Last opp
+                                                    {t('admin.general.upload')}
                                                     <input type="file" accept="image/*" className="hidden" onChange={(e) => handleLogoUpload(e.target.files?.[0])} />
                                                 </label>
                                                 {branding.brandLogoUrl && (
-                                                    <button onClick={handleLogoRemove} className="px-4 py-2 text-sm font-bold text-gray-600 hover:text-red-600 border border-gray-200 rounded-lg bg-white">Fjern</button>
+                                                    <button onClick={handleLogoRemove} className="px-4 py-2 text-sm font-bold text-gray-600 hover:text-red-600 border border-gray-200 rounded-lg bg-white">{t('admin.general.remove')}</button>
                                                 )}
                                             </div>
                                         </div>
-                                        <p className="text-xs text-gray-500">Anbefalt: kvadratisk logo, PNG/SVG, under 500 KB.</p>
+                                        <p className="text-xs text-gray-500">{t('admin.general.logoHint')}</p>
                                     </div>
                                 </div>
                                 <div className="bg-white border-2 border-gray-100 rounded-2xl p-6 space-y-6">
-                                    <h4 className="font-bold text-gray-900 text-lg">Bytt passord</h4>
+                                    <h4 className="font-bold text-gray-900 text-lg">{t('admin.general.password.title')}</h4>
                                     <div className="grid gap-4 md:grid-cols-2">
                                         <div className="md:col-span-1">
-                                            <label className="block text-sm font-bold text-gray-700 mb-1">Gammelt passord</label>
+                                            <label className="block text-sm font-bold text-gray-700 mb-1">{t('admin.general.password.old')}</label>
                                             <input type="password" value={pwdOld} onChange={(e) => setPwdOld(e.target.value)} className="w-full bg-white border-2 border-gray-200 rounded-xl px-4 py-3 focus:ring-4 focus:ring-indigo-100 focus:border-indigo-500 outline-none" />
                                         </div>
                                         <div className="md:col-span-1">
-                                            <label className="block text-sm font-bold text-gray-700 mb-1">Nytt passord</label>
+                                            <label className="block text-sm font-bold text-gray-700 mb-1">{t('admin.general.password.new')}</label>
                                             <input type="password" value={pwdNew} onChange={(e) => setPwdNew(e.target.value)} className="w-full bg-white border-2 border-gray-200 rounded-xl px-4 py-3 focus:ring-4 focus:ring-indigo-100 focus:border-indigo-500 outline-none" />
                                         </div>
                                     </div>
                                     <div className="mt-2 flex items-center gap-3">
                                         <button onClick={handleChangePassword} disabled={!pwdNew || pwdStatus === 'saving'} className="px-5 py-2.5 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 disabled:opacity-60">
-                                            {pwdStatus === 'saving' ? 'Lagrer...' : 'Oppdater passord'}
+                                            {pwdStatus === 'saving' ? t('admin.general.password.saving') : t('admin.general.password.update')}
                                         </button>
-                                        {pwdStatus === 'success' && <span className="text-sm text-green-600 font-medium">Lagret</span>}
-                                        {pwdStatus === 'error' && <span className="text-sm text-red-600 font-medium">Kunne ikke lagre</span>}
+                                        {pwdStatus === 'success' && <span className="text-sm text-green-600 font-medium">{t('admin.general.password.saved')}</span>}
+                                        {pwdStatus === 'error' && <span className="text-sm text-red-600 font-medium">{t('admin.general.password.error')}</span>}
                                     </div>
                                 </div>
                                 <div className="bg-white border-2 border-gray-100 rounded-2xl p-6">
-                                    <h4 className="font-bold text-gray-900 mb-4 text-lg">Lyd</h4>
+                                    <h4 className="font-bold text-gray-900 mb-4 text-lg">{t('admin.general.sound.title')}</h4>
                                     <div className="space-y-4">
                                         <label className="flex items-center justify-between">
                                             <div>
-                                                <p className="font-bold text-gray-800">Kiosk lydeffekter</p>
-                                                <p className="text-xs text-gray-500">Spill av utskriftslyd på kiosken.</p>
+                                                <p className="font-bold text-gray-800">{t('admin.general.sound.kiosk')}</p>
+                                                <p className="text-xs text-gray-500">{t('admin.general.sound.kioskDesc')}</p>
                                             </div>
                                             <input type="checkbox" checked={soundSettings.kioskEffects} onChange={(e) => setSoundSettings({ kioskEffects: e.target.checked })} />
                                         </label>
                                         <label className="flex items-center justify-between">
                                             <div>
-                                                <p className="font-bold text-gray-800">Operatør lydeffekter</p>
-                                                <p className="text-xs text-gray-500">Varsellyd i operatørpanelet.</p>
+                                                <p className="font-bold text-gray-800">{t('admin.general.sound.admin')}</p>
+                                                <p className="text-xs text-gray-500">{t('admin.general.sound.adminDesc')}</p>
                                             </div>
                                             <input type="checkbox" checked={soundSettings.adminEffects} onChange={(e) => setSoundSettings({ adminEffects: e.target.checked })} />
                                         </label>
                                         <label className="flex items-center justify-between">
                                             <div>
-                                                <p className="font-bold text-gray-800">Kall-inn lyd</p>
-                                                <p className="text-xs text-gray-500">Spill av pling når nummer kalles.</p>
+                                                <p className="font-bold text-gray-800">{t('admin.general.sound.call')}</p>
+                                                <p className="text-xs text-gray-500">{t('admin.general.sound.callDesc')}</p>
                                             </div>
                                             <input type="checkbox" checked={soundSettings.callChime} onChange={(e) => setSoundSettings({ callChime: e.target.checked })} />
                                         </label>
                                         <label className="flex items-center justify-between">
                                             <div>
-                                                <p className="font-bold text-gray-800">Opplesning av nummer</p>
-                                                <p className="text-xs text-gray-500">Stemme som leser opp nummer og skranke.</p>
+                                                <p className="font-bold text-gray-800">{t('admin.general.sound.voice')}</p>
+                                                <p className="text-xs text-gray-500">{t('admin.general.sound.voiceDesc')}</p>
                                             </div>
                                             <input type="checkbox" checked={soundSettings.callVoice} onChange={(e) => setSoundSettings({ callVoice: e.target.checked })} />
                                         </label>
                                     </div>
                                 </div>
                                 <div className="bg-white border-2 border-gray-100 rounded-2xl p-6">
-                                    <h4 className="font-bold text-gray-900 mb-2 text-lg">Åpne / Steng køsystemet</h4>
-                                    <p className="text-sm text-gray-600 mb-4">Stenger alle skjermer (storskjerm og skrankeskjermer) med beskjed til brukere.</p>
+                                    <h4 className="font-bold text-gray-900 mb-2 text-lg">{t('admin.general.close.title')}</h4>
+                                    <p className="text-sm text-gray-600 mb-4">{t('admin.general.close.desc')}</p>
                                     <label className="inline-flex items-center gap-3">
                                         <input type="checkbox" checked={!isClosed} onChange={(e) => setSystemClosed(!e.target.checked)} />
-                                        <span className="text-sm font-bold text-gray-800">{isClosed ? 'Systemet er stengt' : 'Systemet er åpent'}</span>
+                                        <span className="text-sm font-bold text-gray-800">{isClosed ? t('admin.general.close.closed') : t('admin.general.close.open')}</span>
                                     </label>
                                 </div>
                                 <div className="bg-white border-2 border-gray-100 rounded-2xl p-6">
-                                    <h4 className="font-bold text-gray-900 mb-2 text-lg">Kiosk PIN</h4>
-                                    <p className="text-sm text-gray-600 mb-4">PIN-kode som må oppgis for å avslutte kioskmodus (5 trykk oppe til høyre).</p>
+                                    <h4 className="font-bold text-gray-900 mb-2 text-lg">{t('admin.general.pin.title')}</h4>
+                                    <p className="text-sm text-gray-600 mb-4">{t('admin.general.pin.desc')}</p>
                                     <input
                                         type="password"
                                         value={kioskExitPin}
                                         onChange={(e) => handleKioskPinChange(e.target.value)}
                                         className="w-full bg-white border-2 border-gray-200 rounded-xl px-4 py-3 focus:ring-4 focus:ring-indigo-100 focus:border-indigo-500 outline-none font-mono text-gray-900"
-                                        placeholder="F.eks. 1234"
+                                        placeholder={t('admin.general.pin.placeholder')}
                                     />
                                 </div>
                                 <div className="bg-white border-2 border-gray-100 rounded-2xl p-6">
-                                    <h4 className="font-bold text-gray-900 mb-2 text-lg">Sikkerhetskopier</h4>
-                                    <p className="text-sm text-gray-600 mb-4">Opprett og last ned backup av databasen før større endringer.</p>
+                                    <h4 className="font-bold text-gray-900 mb-2 text-lg">{t('admin.general.backup.title')}</h4>
+                                    <p className="text-sm text-gray-600 mb-4">{t('admin.general.backup.desc')}</p>
                                     <div className="flex flex-wrap items-center gap-3 mb-4">
                                         <button onClick={handleCreateBackup} disabled={backupStatus === 'working'} className="px-5 py-2.5 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 disabled:opacity-60">
-                                            Opprett backup
+                                            {t('admin.general.backup.create')}
                                         </button>
                                         <button onClick={fetchBackups} disabled={backupsLoading} className="px-4 py-2 bg-gray-100 text-gray-700 rounded-xl font-bold hover:bg-gray-200 disabled:opacity-60">
-                                            Oppdater liste
+                                            {t('admin.general.backup.refresh')}
                                         </button>
-                                        {backupStatus === 'working' && <span className="text-sm text-gray-500 font-medium">Jobber...</span>}
+                                        {backupStatus === 'working' && <span className="text-sm text-gray-500 font-medium">{t('admin.general.backup.working')}</span>}
                                         {backupStatus === 'success' && backupMessage && <span className="text-sm text-green-600 font-medium">{backupMessage}</span>}
                                         {backupStatus === 'error' && backupMessage && <span className="text-sm text-red-600 font-medium">{backupMessage}</span>}
                                     </div>
                                     <div className="border border-gray-100 rounded-xl divide-y divide-gray-100 bg-gray-50">
-                                        {backupsLoading && <div className="px-4 py-3 text-sm text-gray-500">Laster...</div>}
+                                        {backupsLoading && <div className="px-4 py-3 text-sm text-gray-500">{t('admin.general.backup.loading')}</div>}
                                         {!backupsLoading && backups.length === 0 && (
-                                            <div className="px-4 py-3 text-sm text-gray-500">Ingen backups funnet ennå.</div>
+                                            <div className="px-4 py-3 text-sm text-gray-500">{t('admin.general.backup.none')}</div>
                                         )}
                                         {!backupsLoading && backups.map(b => (
                                             <div key={b.file} className="px-4 py-3 flex items-center justify-between gap-4">
@@ -757,30 +783,30 @@ const AdminDashboard: React.FC = () => {
                                                     onClick={() => handleDownloadBackup(b.file)}
                                                     className="text-indigo-600 hover:text-indigo-800 text-sm font-bold flex items-center gap-1"
                                                 >
-                                                    <Download size={14} /> Last ned
+                                                    <Download size={14} /> {t('admin.general.backup.download')}
                                                 </button>
                                             </div>
                                         ))}
                                     </div>
                                 </div>
                                 <div className="bg-yellow-50 border-2 border-yellow-100 rounded-2xl p-6">
-                                    <h4 className="font-bold text-yellow-900 mb-2 text-lg">Nullstill system</h4>
-                                    <p className="text-sm text-yellow-800 mb-6 font-medium">Dette vil slette alle aktive billetter og nullstille køen. Denne handlingen kan ikke angres.</p>
-                                    <button onClick={resetSystem} className="px-6 py-3 bg-yellow-500 hover:bg-yellow-600 text-white rounded-xl font-bold text-sm shadow-md transition-colors">Utfør nullstilling</button>
+                                    <h4 className="font-bold text-yellow-900 mb-2 text-lg">{t('admin.general.reset.title')}</h4>
+                                    <p className="text-sm text-yellow-800 mb-6 font-medium">{t('admin.general.reset.desc')}</p>
+                                    <button onClick={resetSystem} className="px-6 py-3 bg-yellow-500 hover:bg-yellow-600 text-white rounded-xl font-bold text-sm shadow-md transition-colors">{t('admin.general.reset.button')}</button>
                                 </div>
 
                                 <div>
-                                    <label className="block text-sm font-bold text-gray-700 mb-3">Melding på storskjerm</label>
+                                    <label className="block text-sm font-bold text-gray-700 mb-3">{t('admin.general.marquee.label')}</label>
                                     <div className="flex gap-4">
                                         <input 
                                             type="text" 
                                             value={publicMessage}
                                             onChange={(e) => setPublicMessage(e.target.value)}
-                                            placeholder="F.eks. Vi har lunsjpause til 12:00..." 
+                                            placeholder={t('admin.general.marquee.placeholder')} 
                                             className="flex-1 bg-white border-2 border-gray-200 rounded-xl px-4 py-3 focus:ring-4 focus:ring-indigo-100 focus:border-indigo-500 outline-none transition-all font-medium text-gray-900"
                                         />
                                     </div>
-                                    <p className="text-xs text-gray-500 mt-2 font-medium">Denne teksten vil rulle over bunnen på storskjermen for å informere kunder.</p>
+                                    <p className="text-xs text-gray-500 mt-2 font-medium">{t('admin.general.marquee.help')}</p>
                                 </div>
                             </div>
                         </div>
@@ -789,40 +815,40 @@ const AdminDashboard: React.FC = () => {
                     {settingsTab === 'services' && (
                         <div>
                             <div className="flex justify-between items-center mb-8">
-                                <h3 className="text-3xl font-black text-gray-900">Tjenester</h3>
+                                <h3 className="text-3xl font-black text-gray-900">{t('admin.services.title')}</h3>
                             </div>
                             
                             {/* Add Service Form */}
                             <div className="bg-gray-50 p-6 rounded-2xl border border-gray-200 mb-8 grid grid-cols-1 md:grid-cols-5 gap-4 items-end shadow-sm">
                                 <div>
-                                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">Navn</label>
-                                    <input type="text" value={newService.name} onChange={e => setNewService({...newService, name: e.target.value})} className="w-full border-2 border-gray-200 rounded-xl px-4 py-2.5 focus:border-indigo-500 outline-none font-bold text-gray-800 bg-white" placeholder="F.eks. Salg" />
+                                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">{t('admin.services.name')}</label>
+                                    <input type="text" value={newService.name} onChange={e => setNewService({...newService, name: e.target.value})} className="w-full border-2 border-gray-200 rounded-xl px-4 py-2.5 focus:border-indigo-500 outline-none font-bold text-gray-800 bg-white" placeholder={t('admin.services.namePlaceholder')} />
                                 </div>
                                 <div>
-                                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">Prefiks</label>
-                                    <input type="text" value={newService.prefix} onChange={e => setNewService({...newService, prefix: e.target.value.toUpperCase()})} className="w-full border-2 border-gray-200 rounded-xl px-4 py-2.5 focus:border-indigo-500 outline-none font-bold text-gray-800 bg-white" placeholder="S" maxLength={2} />
+                                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">{t('admin.services.prefix')}</label>
+                                    <input type="text" value={newService.prefix} onChange={e => setNewService({...newService, prefix: e.target.value.toUpperCase()})} className="w-full border-2 border-gray-200 rounded-xl px-4 py-2.5 focus:border-indigo-500 outline-none font-bold text-gray-800 bg-white" placeholder={t('admin.services.prefixPlaceholder')} maxLength={2} />
                                 </div>
                                 <div>
-                                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">Estimert tid (min)</label>
+                                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">{t('admin.services.eta')}</label>
                                     <input type="number" min={1} value={newService.estimatedTimePerPersonMinutes ?? 5} onChange={e => setNewService({...newService, estimatedTimePerPersonMinutes: Number(e.target.value) || 1})} className="w-full border-2 border-gray-200 rounded-xl px-4 py-2.5 focus:border-indigo-500 outline-none font-bold text-gray-800 bg-white" />
                                 </div>
                                 <div>
-                                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">Prioritet</label>
+                                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">{t('admin.services.priority')}</label>
                                     <input type="number" min={1} value={newService.priority ?? 1} onChange={e => setNewService({...newService, priority: Number(e.target.value) || 1})} className="w-full border-2 border-gray-200 rounded-xl px-4 py-2.5 focus:border-indigo-500 outline-none font-bold text-gray-800 bg-white" />
                                 </div>
                                 <div>
-                                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">Farge</label>
+                                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">{t('admin.services.color')}</label>
                                     <select value={newService.color} onChange={e => setNewService({...newService, color: e.target.value})} className="w-full border-2 border-gray-200 rounded-xl px-4 py-2.5 focus:border-indigo-500 outline-none font-bold text-gray-800 bg-white cursor-pointer">
-                                        <option value="bg-blue-600">Blå</option>
-                                        <option value="bg-red-600">Rød</option>
-                                        <option value="bg-green-600">Grønn</option>
-                                        <option value="bg-purple-600">Lilla</option>
-                                        <option value="bg-yellow-500">Gul</option>
-                                        <option value="bg-pink-600">Rosa</option>
-                                        <option value="bg-gray-600">Grå</option>
+                                        <option value="bg-blue-600">{t('admin.services.color.blue')}</option>
+                                        <option value="bg-red-600">{t('admin.services.color.red')}</option>
+                                        <option value="bg-green-600">{t('admin.services.color.green')}</option>
+                                        <option value="bg-purple-600">{t('admin.services.color.purple')}</option>
+                                        <option value="bg-yellow-500">{t('admin.services.color.yellow')}</option>
+                                        <option value="bg-pink-600">{t('admin.services.color.pink')}</option>
+                                        <option value="bg-gray-600">{t('admin.services.color.gray')}</option>
                                     </select>
                                 </div>
-                                <button onClick={handleCreateService} className="bg-indigo-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-indigo-700 shadow-lg shadow-indigo-200 transition-all h-[46px]">Legg til</button>
+                                <button onClick={handleCreateService} className="bg-indigo-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-indigo-700 shadow-lg shadow-indigo-200 transition-all h-[46px]">{t('admin.services.add')}</button>
                             </div>
 
                             <div className="space-y-3">
@@ -833,7 +859,7 @@ const AdminDashboard: React.FC = () => {
                                                 <div className={`w-12 h-12 rounded-xl ${s.color} text-white flex items-center justify-center font-black text-lg shadow-sm`}>{s.prefix}</div>
                                                 <div>
                                                     <p className="font-bold text-gray-900 text-lg">{s.name}</p>
-                                                    <p className="text-xs text-gray-500 font-bold uppercase tracking-wide">{s.estimatedTimePerPersonMinutes} min estimert tid</p>
+                                                    <p className="text-xs text-gray-500 font-bold uppercase tracking-wide">{t('admin.services.etaLabel', { minutes: s.estimatedTimePerPersonMinutes })}</p>
                                                 </div>
                                             </div>
                                             <div className="flex items-center gap-2">
@@ -842,18 +868,18 @@ const AdminDashboard: React.FC = () => {
                                         </div>
                                         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
                                             <div>
-                                                <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1">Estimert tid (min)</label>
+                                                <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1">{t('admin.services.eta')}</label>
                                                 <input type="number" min={1} defaultValue={s.estimatedTimePerPersonMinutes} onBlur={e => updateService(s.id, { estimatedTimePerPersonMinutes: Number(e.target.value) || s.estimatedTimePerPersonMinutes })} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" />
                                             </div>
                                             <div>
-                                                <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1">Prioritet</label>
+                                                <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1">{t('admin.services.priority')}</label>
                                                 <input type="number" min={1} defaultValue={s.priority ?? 1} onBlur={e => updateService(s.id, { priority: Number(e.target.value) || 1 })} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" />
-                                                <p className="text-[11px] text-gray-400 mt-1">Høyere tall = høyere prioritet ved innkalling.</p>
+                                                <p className="text-[11px] text-gray-400 mt-1">{t('admin.services.prioHelp')}</p>
                                             </div>
                                             <div className="flex items-end">
                                                 <label className="flex items-center gap-2 text-sm font-bold text-gray-600">
                                                     <input type="checkbox" defaultChecked={s.isOpen !== false} onChange={e => updateService(s.id, { isOpen: e.target.checked })} className="h-4 w-4" />
-                                                    Åpen
+                                                    {t('admin.services.open')}
                                                 </label>
                                             </div>
                                         </div>
@@ -863,13 +889,13 @@ const AdminDashboard: React.FC = () => {
                         </div>
                     )}
 
-                          {settingsTab === 'counters' && (
-                         <div>
-                            <h3 className="text-3xl font-black text-gray-900 mb-8">Skranker</h3>
+                                  {settingsTab === 'counters' && (
+                                 <div>
+                                     <h3 className="text-3xl font-black text-gray-900 mb-8">{t('admin.counters.title')}</h3>
                             
                             <div className="flex gap-4 mb-10">
-                                <input type="text" value={newCounterName} onChange={e => setNewCounterName(e.target.value)} className="border-2 border-gray-200 rounded-xl px-4 py-3 w-72 focus:border-indigo-500 outline-none font-bold text-gray-800 bg-white" placeholder="Navn på skranke..." />
-                                <button onClick={handleCreateCounter} className="bg-indigo-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-indigo-700 shadow-md">Opprett Skranke</button>
+                                <input type="text" value={newCounterName} onChange={e => setNewCounterName(e.target.value)} className="border-2 border-gray-200 rounded-xl px-4 py-3 w-72 focus:border-indigo-500 outline-none font-bold text-gray-800 bg-white" placeholder={t('admin.counters.placeholder')} />
+                                <button onClick={handleCreateCounter} className="bg-indigo-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-indigo-700 shadow-md">{t('admin.counters.create')}</button>
                             </div>
 
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -879,12 +905,12 @@ const AdminDashboard: React.FC = () => {
                                             <h4 className="font-bold text-xl text-gray-900">{c.name}</h4>
                                             <div className="flex gap-3">
                                                 <button onClick={() => updateCounterStatus(c.id, !c.isOnline)} className={`px-3 py-1.5 rounded-lg text-xs font-bold uppercase tracking-wide transition-colors ${c.isOnline ? 'bg-green-100 text-green-700 hover:bg-green-200' : 'bg-red-100 text-red-700 hover:bg-red-200'}`}>
-                                                    {c.isOnline ? 'Online' : 'Offline'}
+                                                    {c.isOnline ? t('admin.counters.online') : t('admin.counters.offline')}
                                                 </button>
                                                 <button onClick={() => removeCounter(c.id)} className="text-gray-300 hover:text-red-500"><X size={20} /></button>
                                             </div>
                                         </div>
-                                        <p className="text-xs font-black text-gray-400 uppercase tracking-widest mb-3">Håndterer tjenester (Klikk for å endre):</p>
+                                        <p className="text-xs font-black text-gray-400 uppercase tracking-widest mb-3">{t('admin.counters.handles')}</p>
                                         <div className="flex flex-wrap gap-2">
                                             {services.map(s => {
                                                 const isActive = c.activeServiceIds.includes(s.id);
@@ -907,40 +933,40 @@ const AdminDashboard: React.FC = () => {
 
                     {settingsTab === 'users' && (
                         <div>
-                            <h3 className="text-3xl font-black text-gray-900 mb-8">Brukere & Tilgang</h3>
+                            <h3 className="text-3xl font-black text-gray-900 mb-8">{t('admin.users.title')}</h3>
                              <div className="bg-gray-50 p-6 rounded-2xl border border-gray-200 mb-10 grid grid-cols-1 md:grid-cols-5 gap-4 items-end shadow-sm">
                                 <div>
-                                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">Brukernavn</label>
-                                    <input type="text" value={newUser.username} onChange={e => setNewUser({...newUser, username: e.target.value})} className="w-full border-2 border-gray-200 rounded-xl px-4 py-2.5 bg-white font-bold focus:border-indigo-500 outline-none" placeholder="f.eks. anna" />
+                                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">{t('admin.users.username')}</label>
+                                    <input type="text" value={newUser.username} onChange={e => setNewUser({...newUser, username: e.target.value})} className="w-full border-2 border-gray-200 rounded-xl px-4 py-2.5 bg-white font-bold focus:border-indigo-500 outline-none" placeholder={t('admin.users.usernamePlaceholder')} />
                                 </div>
                                 <div>
-                                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">Navn</label>
-                                    <input type="text" value={newUser.name} onChange={e => setNewUser({...newUser, name: e.target.value})} className="w-full border-2 border-gray-200 rounded-xl px-4 py-2.5 bg-white font-bold focus:border-indigo-500 outline-none" placeholder="Visningsnavn" />
+                                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">{t('admin.users.name')}</label>
+                                    <input type="text" value={newUser.name} onChange={e => setNewUser({...newUser, name: e.target.value})} className="w-full border-2 border-gray-200 rounded-xl px-4 py-2.5 bg-white font-bold focus:border-indigo-500 outline-none" placeholder={t('admin.users.namePlaceholder')} />
                                 </div>
                                 <div>
-                                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">Rolle</label>
+                                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">{t('admin.users.role')}</label>
                                     <select value={newUser.role} onChange={e => setNewUser({...newUser, role: e.target.value as any})} className="w-full border-2 border-gray-200 rounded-xl px-4 py-2.5 bg-white font-bold focus:border-indigo-500 outline-none">
-                                        <option value="OPERATOR">Operatør</option>
-                                        <option value="ADMIN">Administrator</option>
+                                        <option value="OPERATOR">{t('role.operator')}</option>
+                                        <option value="ADMIN">{t('role.admin')}</option>
                                     </select>
                                 </div>
                                 <div>
-                                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">Passord</label>
-                                    <input type="password" value={newUser.password} onChange={e => setNewUser({...newUser, password: e.target.value})} className="w-full border-2 border-gray-200 rounded-xl px-4 py-2.5 bg-white font-bold focus:border-indigo-500 outline-none" placeholder="Sett passord" />
+                                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">{t('admin.users.password')}</label>
+                                    <input type="password" value={newUser.password} onChange={e => setNewUser({...newUser, password: e.target.value})} className="w-full border-2 border-gray-200 rounded-xl px-4 py-2.5 bg-white font-bold focus:border-indigo-500 outline-none" placeholder={t('admin.users.setPasswordPlaceholder')} />
                                 </div>
                                 <button onClick={handleCreateUser} className="bg-indigo-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-indigo-700 shadow-md h-[46px] disabled:opacity-60" disabled={!newUser.username || !newUser.password}>
-                                    Legg til bruker
+                                    {t('admin.users.add')}
                                 </button>
                             </div>
 
                             <table className="w-full">
                                 <thead>
                                     <tr className="text-left text-xs font-black text-gray-400 uppercase tracking-wider border-b-2 border-gray-100">
-                                        <th className="pb-4 pl-4">Brukernavn</th>
-                                        <th className="pb-4">Navn</th>
-                                        <th className="pb-4">Rolle</th>
-                                        <th className="pb-4">Passord</th>
-                                        <th className="pb-4 text-right pr-4">Handling</th>
+                                        <th className="pb-4 pl-4">{t('admin.users.username')}</th>
+                                        <th className="pb-4">{t('admin.users.name')}</th>
+                                        <th className="pb-4">{t('admin.users.role')}</th>
+                                        <th className="pb-4">{t('admin.users.password')}</th>
+                                        <th className="pb-4 text-right pr-4">{t('admin.users.action')}</th>
                                     </tr>
                                 </thead>
                                 <tbody className="divide-y divide-gray-100">
@@ -956,19 +982,19 @@ const AdminDashboard: React.FC = () => {
                                             </td>
                                             <td className="py-3">
                                                 <select value={draft.role} onChange={e => handleUserDraftChange(u.id, 'role', e.target.value)} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
-                                                    <option value="OPERATOR">Operatør</option>
-                                                    <option value="ADMIN">Administrator</option>
+                                                    <option value="OPERATOR">{t('role.operator')}</option>
+                                                    <option value="ADMIN">{t('role.admin')}</option>
                                                 </select>
                                             </td>
                                             <td className="py-3">
-                                                <input type="password" value={draft.password || ''} onChange={e => handleUserDraftChange(u.id, 'password', e.target.value)} placeholder="Nytt passord (valgfritt)" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+                                                <input type="password" value={draft.password || ''} onChange={e => handleUserDraftChange(u.id, 'password', e.target.value)} placeholder={t('admin.users.passwordPlaceholder')} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" />
                                             </td>
                                             <td className="py-3 pr-4 text-right flex items-center justify-end gap-3">
-                                                <button onClick={() => handleSaveUser(u.id)} className="text-indigo-600 hover:text-indigo-800 text-sm font-bold">Lagre</button>
+                                                <button onClick={() => handleSaveUser(u.id)} className="text-indigo-600 hover:text-indigo-800 text-sm font-bold">{t('admin.users.save')}</button>
                                                 <button
                                                     onClick={() => {
                                                         if (u.role === 'ADMIN' && adminCount <= 1) {
-                                                            alert('Det må alltid finnes minst én admin. Du kan ikke slette siste admin.');
+                                                            alert(t('admin.users.cannotDeleteAdmin'));
                                                             return;
                                                         }
                                                         removeUser(u.id);
@@ -976,7 +1002,7 @@ const AdminDashboard: React.FC = () => {
                                                     className={`text-sm font-bold ${u.role === 'ADMIN' && adminCount <= 1 ? 'text-gray-300 cursor-not-allowed' : 'text-red-400 hover:text-red-600'}`}
                                                     disabled={u.role === 'ADMIN' && adminCount <= 1}
                                                 >
-                                                    Slett
+                                                    {t('admin.users.delete')}
                                                 </button>
                                             </td>
                                         </tr>
@@ -988,29 +1014,29 @@ const AdminDashboard: React.FC = () => {
 
                     {settingsTab === 'devices' && (
                         <div>
-                            <h3 className="text-3xl font-black text-gray-900 mb-8">Enheter & Utskrift</h3>
+                            <h3 className="text-3xl font-black text-gray-900 mb-8">{t('admin.devices.title')}</h3>
                              
                              {/* Add Printer Form */}
                              <div className="bg-gray-50 p-6 rounded-2xl border border-gray-200 mb-10 flex flex-col gap-6 shadow-sm">
-                                <h4 className="font-bold text-gray-600 uppercase tracking-wide text-xs">Legg til nettverksskriver</h4>
+                                <h4 className="font-bold text-gray-600 uppercase tracking-wide text-xs">{t('admin.devices.addPrinter')}</h4>
                                 <div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
                                     <div className="md:col-span-1">
-                                        <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">Navn</label>
-                                        <input type="text" value={newPrinter.name} onChange={e => setNewPrinter({...newPrinter, name: e.target.value})} className="w-full border-2 border-gray-200 rounded-xl px-4 py-2.5 bg-white font-bold focus:border-indigo-500 outline-none" placeholder="Kiosk Printer 1" />
+                                        <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">{t('admin.devices.printerName')}</label>
+                                        <input type="text" value={newPrinter.name} onChange={e => setNewPrinter({...newPrinter, name: e.target.value})} className="w-full border-2 border-gray-200 rounded-xl px-4 py-2.5 bg-white font-bold focus:border-indigo-500 outline-none" placeholder={t('admin.devices.printerNamePlaceholder')} />
                                     </div>
                                     <div className="md:col-span-2">
-                                        <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">IP Adresse</label>
-                                        <input type="text" value={newPrinter.ipAddress} onChange={e => setNewPrinter({...newPrinter, ipAddress: e.target.value})} className="w-full border-2 border-gray-200 rounded-xl px-4 py-2.5 bg-white font-mono font-medium focus:border-indigo-500 outline-none" placeholder="192.168.1.100" />
+                                        <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">{t('admin.devices.printerIp')}</label>
+                                        <input type="text" value={newPrinter.ipAddress} onChange={e => setNewPrinter({...newPrinter, ipAddress: e.target.value})} className="w-full border-2 border-gray-200 rounded-xl px-4 py-2.5 bg-white font-mono font-medium focus:border-indigo-500 outline-none" placeholder={t('admin.devices.printerIpPlaceholder')} />
                                     </div>
-                                    <button onClick={handleAddPrinter} className="bg-indigo-600 text-white px-6 py-2.5 rounded-xl font-bold hover:bg-indigo-700 shadow-md h-[46px] w-full">Legg til</button>
+                                    <button onClick={handleAddPrinter} className="bg-indigo-600 text-white px-6 py-2.5 rounded-xl font-bold hover:bg-indigo-700 shadow-md h-[46px] w-full">{t('admin.devices.printerAdd')}</button>
                                 </div>
                             </div>
 
                             <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
                                 {/* Printer List */}
                                 <div className="bg-white border-2 border-gray-100 rounded-2xl p-6">
-                                    <h4 className="font-bold text-lg text-gray-900 mb-4 flex items-center gap-2"><PrinterIcon size={20} /> Konfigurerte Skrivere</h4>
-                                    {printers.length === 0 ? <p className="text-gray-400 italic text-sm">Ingen skrivere lagt til.</p> : (
+                                    <h4 className="font-bold text-lg text-gray-900 mb-4 flex items-center gap-2"><PrinterIcon size={20} /> {t('admin.devices.configuredPrinters')}</h4>
+                                    {printers.length === 0 ? <p className="text-gray-400 italic text-sm">{t('admin.devices.noPrinters')}</p> : (
                                         <ul className="space-y-3">
                                             {printers.map(p => (
                                                 <li key={p.id} className="flex justify-between items-center p-3 bg-gray-50 rounded-lg border border-gray-100">
@@ -1020,7 +1046,7 @@ const AdminDashboard: React.FC = () => {
                                                     </div>
                                                     <div className="flex items-center gap-2">
                                                         <span className={`px-2 py-1 text-[10px] font-bold uppercase rounded ${p.status === 'ONLINE' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-                                                            {p.status === 'ONLINE' ? 'Online' : 'Offline'}
+                                                            {p.status === 'ONLINE' ? t('admin.devices.online') : t('admin.devices.offline')}
                                                         </span>
                                                         <button onClick={() => removePrinter(p.id)} className="text-gray-300 hover:text-red-500"><X size={16} /></button>
                                                     </div>
@@ -1032,8 +1058,8 @@ const AdminDashboard: React.FC = () => {
 
                                 {/* Kiosk List */}
                                 <div className="bg-white border-2 border-gray-100 rounded-2xl p-6">
-                                    <h4 className="font-bold text-lg text-gray-900 mb-4 flex items-center gap-2"><Monitor size={20} /> Aktive Kiosker</h4>
-                                    {kiosks.length === 0 ? <p className="text-gray-400 italic text-sm">Ingen kiosker oppdaget.</p> : (
+                                    <h4 className="font-bold text-lg text-gray-900 mb-4 flex items-center gap-2"><Monitor size={20} /> {t('admin.devices.activeKiosks')}</h4>
+                                    {kiosks.length === 0 ? <p className="text-gray-400 italic text-sm">{t('admin.devices.noKiosks')}</p> : (
                                         <ul className="space-y-4">
                                             {kiosks.map(k => (
                                                 <li key={k.id} className="p-4 bg-gray-50 rounded-xl border border-gray-100">
@@ -1044,26 +1070,26 @@ const AdminDashboard: React.FC = () => {
                                                                 <div className="flex justify-between items-start mb-3">
                                                                     <div>
                                                                         <p className="font-bold text-gray-800">{k.name}</p>
-                                                                        <p className="text-xs text-gray-400">Sist sett: {new Date(k.lastSeen).toLocaleTimeString()}</p>
+                                                                        <p className="text-xs text-gray-400">{t('admin.devices.lastSeen')}: {new Date(k.lastSeen).toLocaleTimeString()}</p>
                                                                     </div>
                                                                     <div className="flex items-center gap-2">
                                                                         <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-[11px] font-bold uppercase tracking-wide ${online ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
                                                                             <span className={`h-2 w-2 rounded-full ${online ? 'bg-green-500' : 'bg-red-500'}`}></span>
-                                                                            {online ? 'Online' : 'Offline'}
+                                                                            {online ? t('admin.devices.online') : t('admin.devices.offline')}
                                                                         </span>
-                                                                        <button onClick={() => removeKiosk(k.id)} className="text-gray-400 hover:text-red-600" title="Fjern kiosk">
+                                                                        <button onClick={() => removeKiosk(k.id)} className="text-gray-400 hover:text-red-600" title={t('admin.devices.removeKiosk')}>
                                                                             <Trash2 size={16} />
                                                                         </button>
                                                                     </div>
                                                                 </div>
                                                                 <div>
-                                                                    <label className="block text-xs font-bold text-gray-400 uppercase tracking-wide mb-1">Tildelt Skriver</label>
+                                                                    <label className="block text-xs font-bold text-gray-400 uppercase tracking-wide mb-1">{t('admin.devices.assignedPrinter')}</label>
                                                                     <select 
                                                                         value={k.assignedPrinterId || ''} 
                                                                         onChange={(e) => assignPrinterToKiosk(k.id, e.target.value)}
                                                                         className="w-full text-sm border-gray-300 rounded-lg shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
                                                                     >
-                                                                        <option value="">Ingen skriver valgt</option>
+                                                                        <option value="">{t('admin.devices.noneSelected')}</option>
                                                                         {printers.map(p => (
                                                                             <option key={p.id} value={p.id}>{p.name} ({p.ipAddress})</option>
                                                                         ))}
@@ -1081,8 +1107,8 @@ const AdminDashboard: React.FC = () => {
 
                             {/* Counter Display List */}
                             <div className="bg-white border-2 border-gray-100 rounded-2xl p-6 mt-8">
-                                <h4 className="font-bold text-lg text-gray-900 mb-4 flex items-center gap-2"><Monitor size={20} /> Aktive Skrankeskjermer</h4>
-                                {counterDisplays.length === 0 ? <p className="text-gray-400 italic text-sm">Ingen skrankeskjermer oppdaget.</p> : (
+                                <h4 className="font-bold text-lg text-gray-900 mb-4 flex items-center gap-2"><Monitor size={20} /> {t('admin.devices.counterDisplays')}</h4>
+                                {counterDisplays.length === 0 ? <p className="text-gray-400 italic text-sm">{t('admin.devices.noCounterDisplays')}</p> : (
                                     <ul className="space-y-4">
                                         {counterDisplays.map(d => {
                                             const online = Date.now() - d.lastSeen < 15000;
@@ -1092,34 +1118,34 @@ const AdminDashboard: React.FC = () => {
                                                         <div>
                                                             <p className="font-bold text-gray-800">{d.name}</p>
                                                             <p className="text-[11px] font-mono text-gray-500">ID: {d.id.slice(-4).toUpperCase()}</p>
-                                                            <p className="text-xs text-gray-400">Sist sett: {new Date(d.lastSeen).toLocaleTimeString()}</p>
+                                                            <p className="text-xs text-gray-400">{t('admin.devices.lastSeen')}: {new Date(d.lastSeen).toLocaleTimeString()}</p>
                                                         </div>
                                                         <div className="flex items-center gap-2">
                                                             <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-[11px] font-bold uppercase tracking-wide ${online ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
                                                                 <span className={`h-2 w-2 rounded-full ${online ? 'bg-green-500' : 'bg-red-500'}`}></span>
-                                                                {online ? 'Online' : 'Offline'}
+                                                                {online ? t('admin.devices.online') : t('admin.devices.offline')}
                                                             </span>
-                                                            <button onClick={() => removeCounterDisplay(d.id)} className="text-gray-400 hover:text-red-600" title="Fjern skjerm">
+                                                            <button onClick={() => removeCounterDisplay(d.id)} className="text-gray-400 hover:text-red-600" title={t('admin.devices.removeDisplay')}>
                                                                 <Trash2 size={16} />
                                                             </button>
                                                         </div>
                                                     </div>
                                                                 <div>
-                                                                    <label className="block text-xs font-bold text-gray-400 uppercase tracking-wide mb-1">Tildelt skranke</label>
+                                                                    <label className="block text-xs font-bold text-gray-400 uppercase tracking-wide mb-1">{t('admin.devices.assignedCounter')}</label>
                                                                     <select
                                                                         value={d.counterId || ''}
                                                                         onChange={(e) => assignCounterDisplay(d.id, e.target.value || undefined)}
                                                                         className="w-full text-sm border-gray-300 rounded-lg shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
                                                                     >
-                                                                        <option value="">Ikke tildelt</option>
+                                                                        <option value="">{t('admin.devices.notAssigned')}</option>
                                                                         {counters.map(c => (
                                                                             <option key={c.id} value={c.id}>{c.name}</option>
                                                                         ))}
                                                                     </select>
-                                                                    <p className="text-[11px] text-gray-400 mt-1">Endringen push-es umiddelbart til skjermen.</p>
+                                                                    <p className="text-[11px] text-gray-400 mt-1">{t('admin.devices.assignHint')}</p>
                                                                 </div>
                                                                 <div className="mt-4">
-                                                                    <label className="block text-xs font-bold text-gray-400 uppercase tracking-wide mb-1">Melding på denne skrankeskjermen</label>
+                                                                    <label className="block text-xs font-bold text-gray-400 uppercase tracking-wide mb-1">{t('admin.devices.messageLabel')}</label>
                                                                     <div className="flex gap-2">
                                                                         <input
                                                                             type="text"
@@ -1131,17 +1157,17 @@ const AdminDashboard: React.FC = () => {
                                                                                     handleCounterDisplayMessageSave(d.id);
                                                                                 }
                                                                             }}
-                                                                            placeholder="F.eks. Lunsj 11:30-12:00"
+                                                                            placeholder={t('admin.devices.messagePlaceholder')}
                                                                             className="flex-1 text-sm border-gray-300 rounded-lg shadow-sm focus:border-indigo-500 focus:ring-indigo-500 px-3 py-2"
                                                                         />
                                                                         <button
                                                                             onClick={() => handleCounterDisplayMessageSave(d.id)}
                                                                             className="px-4 py-2 bg-indigo-600 text-white text-sm font-bold rounded-lg shadow-sm hover:bg-indigo-700"
                                                                         >
-                                                                            Lagre
+                                                                            {t('common.save')}
                                                                         </button>
                                                                     </div>
-                                                                    <p className="text-[11px] text-gray-400 mt-1">Vises nederst på denne skrankeskjermen.</p>
+                                                                    <p className="text-[11px] text-gray-400 mt-1">{t('admin.devices.messageHelp')}</p>
                                                                 </div>
                                                 </li>
                                             );

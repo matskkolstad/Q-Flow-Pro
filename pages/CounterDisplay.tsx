@@ -4,13 +4,24 @@ import { TicketStatus } from '../types';
 import { Logo } from '../components/Logo';
 import { Link, useLocation } from 'react-router-dom';
 import { Monitor, Wifi, Clock, ArrowRight, X } from 'lucide-react';
+import { useI18n } from '../context/I18nContext';
 
 const COUNTER_DISPLAY_HEARTBEAT_MS = 10_000;
 
 const CounterDisplay: React.FC = () => {
   const { counters, tickets, counterDisplays, isClosed, registerCounterDisplay, assignCounterDisplay, branding } = useQueue();
+  const { t } = useI18n();
   const location = useLocation();
   const searchParams = useMemo(() => new URLSearchParams(location.search), [location.search]);
+
+  // Mark as display so sounds are allowed to play on this screen
+  useEffect(() => {
+    localStorage.setItem('qflow_client_role', 'display');
+    return () => {
+      const role = localStorage.getItem('qflow_client_role');
+      if (role === 'display') localStorage.removeItem('qflow_client_role');
+    };
+  }, []);
 
   const paramCounterId = searchParams.get('counterId') || undefined;
 
@@ -104,17 +115,17 @@ const CounterDisplay: React.FC = () => {
         <div className="flex items-center gap-3">
           <Monitor className="text-indigo-400" />
           <div>
-            <p className="text-xs uppercase font-bold text-gray-400">Skrankeskjerm</p>
-            <p className="text-lg font-black text-white">{currentCounter?.name || 'Ingen skranke valgt'}</p>
+            <p className="text-xs uppercase font-bold text-gray-400">{t('counter.title')}</p>
+            <p className="text-lg font-black text-white">{currentCounter?.name || t('counter.unassigned')}</p>
           </div>
         </div>
         <div className="flex items-center gap-4">
           <div className="text-left">
-            <p className="text-[11px] uppercase font-bold text-gray-500">Tildelt skranke</p>
-            <p className="text-sm font-black text-white">{currentCounter?.name || 'Ikke tildelt ennå'}</p>
+            <p className="text-[11px] uppercase font-bold text-gray-500">{t('counter.assigned')}</p>
+            <p className="text-sm font-black text-white">{currentCounter?.name || t('counter.unassigned')}</p>
           </div>
           <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full bg-green-900/60 text-green-300 text-xs font-bold">
-            <Wifi size={14} /> Online
+            <Wifi size={14} /> {t('counter.online')}
           </span>
         </div>
       </header>
@@ -124,12 +135,12 @@ const CounterDisplay: React.FC = () => {
           <div className="absolute inset-0 bg-[radial-gradient(circle_at_20%_20%,rgba(99,102,241,0.15),transparent_35%),radial-gradient(circle_at_80%_20%,rgba(16,185,129,0.12),transparent_30%)]"></div>
           <div className="relative z-10 space-y-6">
             <Logo className="h-12 w-12 mx-auto" textClass="text-3xl text-white leading-tight" brandText={branding.brandText} brandLogoUrl={branding.brandLogoUrl} />
-            <p className="text-base font-bold text-gray-300 tracking-[0.12em]">Gå til {currentCounter?.name || 'skranke'}</p>
+            <p className="text-base font-bold text-gray-300 tracking-[0.12em]">{t('counter.goTo', { counter: currentCounter?.name || t('counter.subtitle') })}</p>
             {currentTicket ? (
               <div className="space-y-6">
                 <div className="flex items-center justify-center gap-4 text-gray-300 text-sm font-bold">
                   <Clock size={18} />
-                  <span>Nummer kalles nå</span>
+                  <span>{t('counter.callingNow')}</span>
                 </div>
                 <div className="text-[10rem] leading-none font-black tracking-tighter text-white drop-shadow-[0_10px_40px_rgba(0,0,0,0.35)]">
                   {currentTicket.number}
@@ -144,8 +155,8 @@ const CounterDisplay: React.FC = () => {
                 <div className="w-28 h-28 rounded-full border-4 border-gray-700 mx-auto flex items-center justify-center text-gray-500">
                   <Clock size={48} />
                 </div>
-                <p className="text-3xl font-black text-white">Venter på neste nummer...</p>
-                <p className="text-sm text-gray-400 font-medium">{currentCounter ? `${waitingCount} i kø for denne skranken.` : 'Tildel skranke i Admin for å vise numre.'}</p>
+                <p className="text-3xl font-black text-white">{t('counter.waitingNext')}</p>
+                <p className="text-sm text-gray-400 font-medium">{currentCounter ? t('counter.waitingCount', { count: waitingCount }) : t('counter.assignInAdmin')}</p>
               </div>
             )}
           </div>
@@ -166,8 +177,8 @@ const CounterDisplay: React.FC = () => {
         {(isClosed || counterOffline) && (
           <div className="absolute inset-0 bg-black/85 z-20 flex flex-col items-center justify-center text-center px-6">
             <Logo className="h-10 w-10 mb-4" textClass="text-white" brandText={branding.brandText} brandLogoUrl={branding.brandLogoUrl} />
-            <p className="text-4xl font-black text-white mb-2">{isClosed ? 'Stengt' : 'Skranke stengt'}</p>
-            <p className="text-lg text-gray-300 max-w-2xl">{isClosed ? 'Køsystemet er midlertidig stengt. Vennligst vent.' : 'Denne skranken er offline. Vennligst bruk annen skranke eller vent.'}</p>
+            <p className="text-4xl font-black text-white mb-2">{isClosed ? t('counter.closed.system.title') : t('counter.closed.counter.title')}</p>
+            <p className="text-lg text-gray-300 max-w-2xl">{isClosed ? t('counter.closed.system.subtitle') : t('counter.closed.counter.subtitle')}</p>
           </div>
         )}
       </main>

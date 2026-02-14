@@ -5,9 +5,11 @@ import { Logo } from '../components/Logo';
 import { audioService } from '../services/audioService';
 import { ArrowRight, Clock, X, Smartphone } from 'lucide-react';
 import { Link } from 'react-router-dom';
+import { useI18n } from '../context/I18nContext';
 
 const PublicDisplay: React.FC = () => {
   const { tickets, counters, services, publicMessage, isClosed, branding } = useQueue();
+  const { t } = useI18n();
   const headerRef = useRef<HTMLDivElement>(null);
   const footerRef = useRef<HTMLDivElement>(null);
   const [contentHeight, setContentHeight] = useState<number>();
@@ -92,16 +94,16 @@ const PublicDisplay: React.FC = () => {
 
           <h2 className="text-2xl lg:text-3xl font-black text-white uppercase tracking-widest mb-5 lg:mb-7 border-b-2 border-gray-800 pb-3 flex items-center gap-3 lg:gap-4">
             <span className="w-4 h-4 rounded-full bg-green-500 animate-pulse"></span>
-            Nå betjenes
+            {t('display.nowServing')}
           </h2>
           
           <div className="flex-1 space-y-3 lg:space-y-5 overflow-y-auto custom-scrollbar min-h-0 pb-1">
              {servingTickets.length === 0 && (
                 <div className="h-full flex flex-col items-center justify-center text-gray-500">
-                    <div className="w-32 h-32 rounded-full border-4 border-gray-800 flex items-center justify-center mb-6 bg-gray-900">
-                        <Clock size={64} className="opacity-50"/>
-                    </div>
-                    <p className="text-3xl font-light">Venter på neste nummer...</p>
+                  <div className="w-32 h-32 rounded-full border-4 border-gray-800 flex items-center justify-center mb-6 bg-gray-900">
+                    <Clock size={64} className="opacity-50"/>
+                  </div>
+                  <p className="text-3xl font-light">{t('display.waitingForNext')}</p>
                 </div>
              )}
 
@@ -125,7 +127,7 @@ const PublicDisplay: React.FC = () => {
                     <ArrowRight className="text-gray-700 h-12 w-12 lg:h-16 lg:w-16" />
 
                     <div className="text-right min-w-[160px] lg:min-w-[200px]">
-                      <p className="text-gray-400 text-lg lg:text-xl uppercase font-bold tracking-widest mb-1">Gå til</p>
+                       <p className="text-gray-400 text-lg lg:text-xl uppercase font-bold tracking-widest mb-1">{t('display.goTo')}</p>
                       <h3 className="text-4xl lg:text-5xl font-black text-green-400 leading-tight">{counter?.name || 'Skranke'}</h3>
                     </div>
                  </div>
@@ -138,7 +140,7 @@ const PublicDisplay: React.FC = () => {
         <div className="lg:w-1/3 flex-1 min-w-0 flex flex-col gap-3 lg:gap-4 min-h-0">
             <div className="bg-gray-900/80 backdrop-blur-md rounded-[2rem] p-6 lg:p-8 shadow-2xl flex-1 flex flex-col border border-white/5 min-h-0">
                 <h2 className="text-2xl font-bold text-gray-300 uppercase tracking-widest mb-6 border-b border-gray-800 pb-4">
-                    Neste i køen
+                  {t('display.waitingList')}
                 </h2>
             <div className="space-y-3 overflow-y-auto custom-scrollbar flex-1 min-h-0 pr-1">
                     {waitingTickets.map((ticket, index) => {
@@ -156,9 +158,9 @@ const PublicDisplay: React.FC = () => {
                          );
                     })}
                     {waitingTickets.length === 0 && (
-                        <div className="flex flex-col items-center justify-center h-40 text-gray-600">
-                             <p className="text-xl italic">Ingen i køen</p>
-                        </div>
+                      <div className="flex flex-col items-center justify-center h-40 text-gray-600">
+                         <p className="text-xl italic">{t('display.waitingEmpty')}</p>
+                      </div>
                     )}
                 </div>
             </div>
@@ -168,9 +170,9 @@ const PublicDisplay: React.FC = () => {
                  <div className="relative z-10">
                     <h3 className="font-bold text-2xl mb-1 flex items-center gap-2">
                         <Smartphone size={24} />
-                        Trekk digitalt
+                        {t('display.qr.title')}
                     </h3>
-                  <p className="text-indigo-200 text-sm">Skann koden for å bruke mobilen</p>
+                  <p className="text-indigo-200 text-sm">{t('display.qr.subtitle')}</p>
                   {mobileUrl && (
                    <p className="text-indigo-200 text-[11px] mt-1 break-all leading-tight opacity-80">{mobileUrl}</p>
                   )}
@@ -203,8 +205,8 @@ const PublicDisplay: React.FC = () => {
       {isClosed && (
         <div className="absolute inset-0 bg-black/90 z-50 flex flex-col items-center justify-center text-center px-6">
           <Logo className="mb-4" textClass="text-white" />
-          <p className="text-4xl lg:text-5xl font-black text-white mb-2">Stengt</p>
-          <p className="text-lg lg:text-xl text-gray-300 max-w-2xl">Køsystemet er midlertidig stengt. Vennligst vent til vi åpner igjen.</p>
+          <p className="text-4xl lg:text-5xl font-black text-white mb-2">{t('display.closed.title')}</p>
+          <p className="text-lg lg:text-xl text-gray-300 max-w-2xl">{t('display.closed.subtitle')}</p>
         </div>
       )}
       </div>

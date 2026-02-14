@@ -4,11 +4,13 @@ import { TicketStatus } from '../types';
 import { Logo } from '../components/Logo';
 import { Bell, MapPin, Clock, X } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
+import { useI18n } from '../context/I18nContext';
 
 const MobileClient: React.FC = () => {
     const { services, addTicket, tickets, getWaitTime, branding, isClosed, publicMessage } = useQueue();
   const [myTicketId, setMyTicketId] = useState<string | null>(null);
   const navigate = useNavigate();
+    const { t } = useI18n();
 
   const myTicket = tickets.find(t => t.id === myTicketId);
 
@@ -29,7 +31,7 @@ const MobileClient: React.FC = () => {
 
             <Logo className="h-12 w-12 mb-8 mt-12" textClass="text-3xl font-black" brandText={branding.brandText} brandLogoUrl={branding.brandLogoUrl} />
             <div className="bg-white w-full max-w-sm rounded-[2rem] shadow-xl p-8 border border-gray-100">
-                <h2 className="text-2xl font-bold text-center mb-8 text-gray-900">Trekk kølapp</h2>
+                <h2 className="text-2xl font-bold text-center mb-8 text-gray-900">{t('mobile.title')}</h2>
                 <div className="space-y-4">
                     {services.map(s => (
                         <button 
@@ -43,13 +45,13 @@ const MobileClient: React.FC = () => {
                             </div>
                             <div className="text-left flex-1">
                                 <h3 className="font-bold text-lg text-gray-900">{s.name}</h3>
-                                <p className="text-sm text-gray-500">~{getWaitTime(s.id)} min ventetid</p>
+                                <p className="text-sm text-gray-500">{t('mobile.waitTime', { minutes: getWaitTime(s.id) })}</p>
                             </div>
                         </button>
                     ))}
                 </div>
             </div>
-                        <p className="mt-8 text-gray-400 text-sm font-medium">Demo Mobilvisning</p>
+                        <p className="mt-8 text-gray-400 text-sm font-medium">{t('mobile.demo')}</p>
 
                         {publicMessage && (
                             <div className="mt-4 w-full max-w-sm bg-yellow-50 border border-yellow-200 text-yellow-900 text-sm font-semibold px-4 py-3 rounded-2xl text-center">
@@ -60,8 +62,8 @@ const MobileClient: React.FC = () => {
                         {isClosed && (
                             <div className="fixed inset-0 bg-white/90 z-40 flex flex-col items-center justify-center px-6 text-center">
                                 <Logo className="h-12 w-12 mb-4" textClass="text-2xl" brandText={branding.brandText} brandLogoUrl={branding.brandLogoUrl} />
-                                <p className="text-3xl font-black text-gray-900 mb-2">Stengt</p>
-                                <p className="text-lg text-gray-600 max-w-xl">Køsystemet er midlertidig stengt. Vennligst vent til det åpnes igjen.</p>
+                                <p className="text-3xl font-black text-gray-900 mb-2">{t('mobile.closed.title')}</p>
+                                <p className="text-lg text-gray-600 max-w-xl">{t('mobile.closed.subtitle')}</p>
                             </div>
                         )}
         </div>
@@ -77,8 +79,8 @@ const MobileClient: React.FC = () => {
       
       <div className="w-full flex justify-between items-center text-white/90">
          <Logo className="h-10 w-10" textClass="text-xl font-black text-white" brandText={branding.brandText} brandLogoUrl={branding.brandLogoUrl} />
-         <button onClick={() => setMyTicketId(null)} className="text-xs font-bold bg-black/20 px-4 py-2 rounded-full hover:bg-black/30 backdrop-blur-sm transition-colors text-white">
-            Avslutt
+            <button onClick={() => setMyTicketId(null)} className="text-xs font-bold bg-black/20 px-4 py-2 rounded-full hover:bg-black/30 backdrop-blur-sm transition-colors text-white">
+                {t('mobile.exit')}
          </button>
       </div>
 
@@ -88,10 +90,10 @@ const MobileClient: React.FC = () => {
                 <div className="w-24 h-24 bg-green-100 text-green-600 rounded-full flex items-center justify-center mx-auto mb-6">
                     <Bell size={48} />
                 </div>
-                <h1 className="text-3xl font-black text-gray-900 mb-2">Det er din tur!</h1>
-                <p className="text-gray-600 mb-8 text-lg font-medium">Vennligst gå til skranken.</p>
+                 <h1 className="text-3xl font-black text-gray-900 mb-2">{t('mobile.ticket.yourTurn.title')}</h1>
+                 <p className="text-gray-600 mb-8 text-lg font-medium">{t('mobile.ticket.yourTurn.subtitle')}</p>
                 <div className="bg-gray-100 rounded-2xl p-6">
-                     <p className="text-sm text-gray-500 uppercase font-bold tracking-widest mb-2">Ditt nummer</p>
+                     <p className="text-sm text-gray-500 uppercase font-bold tracking-widest mb-2">{t('mobile.ticket.yourNumber')}</p>
                      <p className="text-6xl font-black text-gray-900 tracking-tighter">{myTicket.number}</p>
                 </div>
             </div>
@@ -100,7 +102,7 @@ const MobileClient: React.FC = () => {
                 <div className={`absolute top-0 left-0 w-full h-3 ${service?.color}`}></div>
                 
                 <div className="text-center mb-8 mt-4">
-                    <p className="text-gray-400 text-sm font-bold uppercase tracking-widest mb-3">Ditt kønummer</p>
+                    <p className="text-gray-400 text-sm font-bold uppercase tracking-widest mb-3">{t('mobile.ticket.yourNumber')}</p>
                     <div className="text-7xl font-black text-gray-900 mb-4 tracking-tighter">{myTicket.number}</div>
                     <span className={`inline-block px-4 py-1.5 rounded-full text-xs font-bold text-white uppercase tracking-wider shadow-sm ${service?.color}`}>
                         {service?.name}
@@ -111,21 +113,21 @@ const MobileClient: React.FC = () => {
                     <div className="flex items-center justify-between">
                         <div className="flex items-center gap-3 text-gray-600">
                              <div className="p-2 bg-indigo-50 rounded-lg text-indigo-600"><Clock size={20} /></div>
-                             <span className="font-bold text-sm text-gray-500 uppercase tracking-wide">Est. ventetid</span>
+                             <span className="font-bold text-sm text-gray-500 uppercase tracking-wide">{t('mobile.ticket.estimated')}</span>
                         </div>
                         <span className="font-black text-2xl text-gray-900">{waitTime} <span className="text-sm font-bold text-gray-400">min</span></span>
                     </div>
                     <div className="flex items-center justify-between">
                         <div className="flex items-center gap-3 text-gray-600">
                              <div className="p-2 bg-indigo-50 rounded-lg text-indigo-600"><MapPin size={20} /></div>
-                             <span className="font-bold text-sm text-gray-500 uppercase tracking-wide">Foran i kø</span>
+                             <span className="font-bold text-sm text-gray-500 uppercase tracking-wide">{t('mobile.ticket.ahead')}</span>
                         </div>
                         <span className="font-black text-2xl text-gray-900">{peopleAhead}</span>
                     </div>
                 </div>
 
                 <div className="mt-10 pt-6 border-t border-gray-100 text-center">
-                    <p className="text-xs text-gray-400 font-bold uppercase tracking-wider">Vi varsler deg når det er din tur</p>
+                    <p className="text-xs text-gray-400 font-bold uppercase tracking-wider">{t('mobile.ticket.notify')}</p>
                 </div>
             </div>
         )}

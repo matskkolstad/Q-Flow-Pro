@@ -8,6 +8,7 @@ import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
 import fs from 'fs';
 import helmet from 'helmet';
+import sharp from 'sharp';
 import { loadState as loadStateFromStore, saveState as saveStateToStore, backupDatabase, listBackups } from './lib/stateStore.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -23,7 +24,7 @@ const ALLOWED_WS_ORIGINS = ALLOWED_ORIGINS.map((o) => o.replace(/^http/, 'ws'));
 
 const app = express();
 app.set('trust proxy', 1);
-app.use(express.json());
+app.use(express.json({ limit: '10mb' }));
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
   cors: {
@@ -321,14 +322,94 @@ setInterval(async () => {
 
 // --- REST: server-side printing to avoid browser CORS/mixed-content ---
 app.post('/api/print-ticket', async (req, res) => {
-  const { ipAddress, port = 9100, ticket, serviceName, waitTime } = req.body || {};
+  const { ipAddress, port = 9100, ticket, serviceName, waitTime, language: langInput, brandText, brandLogoUrl } = req.body || {};
   if (!ipAddress || !ticket?.number) {
     return res.status(400).json({ ok: false, error: 'Missing printer or ticket' });
   }
+  const lang = langInput === 'en' ? 'en' : 'no';
+  const labels = {
+    en: { welcome: 'Welcome', yourNumber: 'Your number', time: 'Time', wait: 'Est. wait', please: 'Please wait for your turn.', minutes: 'min' },
+    no: { welcome: 'Velkommen', yourNumber: 'Nummer', time: 'Tid', wait: 'Est. ventetid', please: 'Vennligst vent på din tur.', minutes: 'min' },
+  }[lang];
+  const brandLine = (() => {
+    const cleaned = (val) => cleanText(typeof val === 'string' ? val : '', 60);
+    const fromPayload = cleaned(brandText);
+    if (fromPayload) return fromPayload;
+    const fromState = cleaned(state.branding?.brandText);
+    if (fromState) return fromState;
+    return 'Q-Flow Pro';
+  })();
+  const logoUrl = (() => {
+    if (typeof brandLogoUrl === 'string' && brandLogoUrl.trim().length > 0) return brandLogoUrl.trim();
+    if (state.branding?.brandLogoUrl && state.branding.brandLogoUrl.trim().length > 0) return state.branding.brandLogoUrl.trim();
+    return '';
+  })();
+  const date = new Date().toLocaleTimeString(lang === 'en' ? 'en-GB' : 'no-NO', { hour: '2-digit', minute: '2-digit' });
+  const waitLine = (waitTime === undefined || waitTime === null)
+    ? `${labels.wait}: --`
+    : `${labels.wait}: ${waitTime} ${labels.minutes}`;
 
-  const date = new Date().toLocaleTimeString('no-NO', { hour: '2-digit', minute: '2-digit' });
+  addLog(`Forbereder utskrift av billett ${ticket.number} (språk=${lang}, brand=${brandLine})`, 'INFO');
 
-  const buildEscPos = () => {
+  const defaultLogoSvg = `<svg width="140" height="140" viewBox="0 0 140 140" xmlns="http://www.w3.org/2000/svg"><rect x="18" y="18" width="104" height="104" rx="20" fill="#4f46e5"/><path d="M70 42l36 14-36 14-36-14 36-14Z" fill="#ffffff"/><path d="M70 64l36 14-36 14-36-14 36-14Z" fill="#e5e7eb"/><path d="M70 54l36 14-36 14-36-14 36-14Z" fill="#cbd5e1"/></svg>`;
+
+  const fetchLogoBuffer = async () => {
+    const tryUrls = [logoUrl, state.branding?.brandLogoUrl].filter(u => typeof u === 'string' && u.trim().length > 0);
+    for (const candidate of tryUrls) {
+      try {
+        if (candidate.startsWith('data:')) {
+          const base64 = candidate.split(',')[1] || '';
+          if (base64) return Buffer.from(base64, 'base64');
+          continue;
+        }
+        const resp = await fetch(candidate);
+        if (!resp.ok) continue;
+        const arr = await resp.arrayBuffer();
+        return Buffer.from(arr);
+      } catch (err) {
+        console.warn('Logo fetch failed', err?.message || err);
+        continue;
+      }
+    }
+    return Buffer.from(defaultLogoSvg);
+  };
+
+  const logoToRaster = async (buf) => {
+    try {
+      const { data, info } = await sharp(buf)
+        .resize({ width: 384, fit: 'inside', withoutEnlargement: true })
+        .flatten({ background: '#FFFFFF' })
+        .greyscale()
+        .threshold(180)
+        .raw()
+        .toBuffer({ resolveWithObject: true });
+
+      const bytesPerRow = Math.ceil(info.width / 8);
+      const raster = Buffer.alloc(bytesPerRow * info.height);
+      for (let y = 0; y < info.height; y++) {
+        for (let x = 0; x < info.width; x++) {
+          const byteIndex = y * bytesPerRow + (x >> 3);
+          const bit = 7 - (x & 7);
+          const pixel = data[y * info.width + x];
+          if (pixel === 0) raster[byteIndex] |= (1 << bit); // black pixel
+        }
+      }
+
+      const GS = '\x1d';
+      const m = '\x00';
+      const xL = String.fromCharCode(bytesPerRow & 0xff);
+      const xH = String.fromCharCode((bytesPerRow >> 8) & 0xff);
+      const yL = String.fromCharCode(info.height & 0xff);
+      const yH = String.fromCharCode((info.height >> 8) & 0xff);
+      const header = Buffer.from(`${GS}v0${m}${xL}${xH}${yL}${yH}`, 'binary');
+      return Buffer.concat([header, raster]);
+    } catch (err) {
+      console.warn('Logo rasterization failed', err?.message || err);
+      return null;
+    }
+  };
+
+  const buildEscPos = async () => {
     const ESC = '\x1b';
     const GS = '\x1d';
     const reset = ESC + '@';
@@ -342,21 +423,26 @@ app.post('/api/print-ticket', async (req, res) => {
     const cut = GS + 'V' + '\x00';
 
     // Tight top padding; use CP1252 to render å/ø/æ correctly
-    const text =
-      reset + cp1252 +
-      center + boldOn + 'Q-Flow Pro\n' + boldOff + 'Velkommen\n\n' +
-      boldOn + 'Nummer:\n' + boldOff + doubleOn + `${ticket.number}\n` + doubleOff + '\n' +
-      (serviceName ? serviceName + '\n\n' : '\n') +
-      left + `Tid: ${date}\n` + `Est. ventetid: ${waitTime ?? ''} min\n\n` +
-      center + 'Vennligst vent på din tur.\n\n' +
-      cut + '\n';
+    const logoBuf = await fetchLogoBuffer();
+    const raster = logoBuf ? await logoToRaster(logoBuf) : null;
 
-    return Buffer.from(text, 'latin1');
+    const parts = [
+      Buffer.from(reset + cp1252, 'latin1'),
+      raster ? Buffer.from(center, 'latin1') : null,
+      raster,
+      Buffer.from(center + boldOn + `${brandLine}\n` + boldOff + `${labels.welcome}\n\n`, 'latin1'),
+      Buffer.from(boldOn + `${labels.yourNumber}:\n` + boldOff + doubleOn + `${ticket.number}\n` + doubleOff + '\n', 'latin1'),
+      Buffer.from((serviceName ? serviceName + '\n\n' : '\n'), 'latin1'),
+      Buffer.from(left + `${labels.time}: ${date}\n` + `${waitLine}\n\n`, 'latin1'),
+      Buffer.from(center + `${labels.please}\n\n` + cut + '\n', 'latin1'),
+    ].filter(Boolean);
+
+    return Buffer.concat(parts);
   };
 
-  const sendRaw9100 = () => new Promise((resolve, reject) => {
+  const sendRaw9100 = () => new Promise(async (resolve, reject) => {
     const sock = new net.Socket();
-    const payload = buildEscPos();
+    const payload = await buildEscPos();
     let settled = false;
 
     const done = (err) => {
@@ -395,12 +481,12 @@ app.post('/api/print-ticket', async (req, res) => {
             <text align="center"/>
             <text smooth="true"/>
             <text font="font_a" width="1" height="1"/>
-            <text>Velkommen til\n</text>
+            <text>${labels.welcome}\n</text>
             <text font="font_a" width="2" height="2"/>
-            <text>Q-Flow Pro\n</text>
+            <text>${brandLine}\n</text>
             <feed line="1"/>
             <text font="font_a" width="1" height="1"/>
-            <text>Ditt nummer:\n</text>
+            <text>${labels.yourNumber}:\n</text>
             <text font="font_b" width="4" height="4"/>
             <text>${ticket.number}\n</text>
             <feed line="1"/>
@@ -409,11 +495,11 @@ app.post('/api/print-ticket', async (req, res) => {
             <feed line="1"/>
             <text align="left"/>
             <text font="font_a" width="1" height="1"/>
-            <text>Tid: ${date}\n</text>
-            <text>Est. ventetid: ${waitTime ?? ''} min\n</text>
+            <text>${labels.time}: ${date}\n</text>
+            <text>${waitLine}\n</text>
             <feed line="2"/>
             <text align="center"/>
-            <text>Vennligst vent pa din tur.\n</text>
+            <text>${labels.please}\n</text>
             <feed line="1"/>
             <cut type="feed"/>
           </epos-print>
@@ -738,9 +824,14 @@ io.on('connection', (socket) => {
     }
 
     if (status === 'SERVING') {
-        const counter = state.counters.find(c => c.id === counterId);
-        addLog(`Skranke ${counter?.name || '?'} kaller inn ${ticket.number}`, 'ACTION');
-        io.emit('play-sound', { type: 'ding', text: `Nummer ${ticket.number}, til ${counter?.name}` });
+      const counter = state.counters.find(c => c.id === counterId);
+      const counterName = counter?.name || 'skranken';
+      addLog(`Skranke ${counter?.name || '?'} kaller inn ${ticket.number}`, 'ACTION');
+      io.emit('play-sound', {
+        type: 'ding',
+        textNo: `Nummer ${ticket.number}, til ${counterName}`,
+        textEn: `Ticket ${ticket.number}, go to ${counterName}`
+      });
     }
 
     addLog(`Statusendring ${ticket.number}: ${oldStatus} -> ${status} av ${actorLabel(socket)}`, 'ACTION');
