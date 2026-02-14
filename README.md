@@ -18,6 +18,8 @@
 - [Branding](#branding)
 - [Data & Persistence](#data--persistence)
 - [Operational Tips](#operational-tips)
+- [User Management (GUI & CLI)](#user-management-gui--cli)
+- [Using the System (flow)](#using-the-system-flow)
 
 ## Features
 - Pull tickets from kiosk, mobile client, or operator.
@@ -115,3 +117,61 @@ Exposes port 3000. Set env vars via compose or an `.env` file referenced there.
 - Place behind HTTPS reverse proxy (Nginx/Caddy) with TLS and optionally HSTS.
 - Enable CSP (ENABLE_CSP=1) when assets are CSP-ready.
 - Backup/log rotation is built-in; monitor disk and keep offsite copies if needed.
+
+## User Management (GUI & CLI)
+
+### GUI (recommended)
+1) Login as admin → Settings → Users.
+2) Create user: set name, username, role (ADMIN/OPERATOR), password (policy: ≥8 chars, upper+lower+digit).
+3) Save; server enforces at least one admin. Passwords are hashed server-side.
+4) Edit user: update name/role/password, save. Delete user only if at least one admin remains.
+
+### First admin (if DB is empty)
+On first boot the defaults from `db.json` are loaded (admin/Admin123!, operator/Operator123!). Change these immediately after login under Users.
+
+### CLI (headless/server-side)
+Script: `npm run user-cli` (alias for `node scripts/user-cli.js`). Supports interactive shell or one-shot commands.
+
+Interactive mode:
+```sh
+npm run user-cli
+qflow> list
+qflow> create --username admin2 --name "Admin Two" --role ADMIN --password StrongPass1
+qflow> exit
+```
+
+One-shot examples:
+```sh
+# create
+npm run user-cli -- create --username kiosk --name "Kiosk" --role OPERATOR --password KioskPass1
+# list
+npm run user-cli -- list
+# update role
+npm run user-cli -- update --id <userId> --role OPERATOR
+# change password
+npm run user-cli -- update --id <userId> --password NewPass1
+# delete
+npm run user-cli -- delete --id <userId>
+```
+Guards: cannot delete or demote last admin (`at_least_one_admin_required`).
+
+## Using the System (flow)
+1) **Login** (admin/operator) at `/`.
+2) **Configure** (admin):
+  - Services: name, prefix, color, ETA, priority, open/closed.
+  - Counters: assign active service IDs; set online/offline.
+  - Users: add operators/admins.
+  - Printers: register network printers; assign to kiosks.
+  - Branding/message/sound: set brand text/logo, public message, sound toggles.
+3) **Public display**: open `/public` (or link in UI). Shows now-serving and up-next; uses dark theme with your branding.
+4) **Counter display**: open `/counter-display?counterId=<id>` on a screen at the counter. Admin can assign displays to counters in Devices.
+5) **Kiosk**: open `/kiosk` on a kiosk device; users draw tickets per service (prints if printer assigned; otherwise on-screen).
+6) **Mobile client**: `/mobile/new` lets users draw a ticket and track status.
+7) **Calling flow** (operator/admin):
+  - In Dashboard, pick a counter, click a waiting ticket → “Serving”.
+  - System broadcasts to displays; public display highlights now-serving; counter display shows target.
+  - When done, mark “Completed”; counter is freed.
+8) **Close/Open system**: toggle in Admin → General; kiosks blocked while closed.
+9) **Backups**: Admin → Backup (or API); downloads SQLite snapshot.
+
+Tip: Role separation — operators can serve tickets but not manage users/settings; admins can do all operations.
