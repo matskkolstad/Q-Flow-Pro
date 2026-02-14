@@ -19,6 +19,7 @@ ENV NODE_ENV=production
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/server.js ./server.js
+COPY --from=build /app/lib ./lib
 COPY --from=build /app/package*.json ./
 
 # Ensure db file exists inside container (bind mount will override when present)
