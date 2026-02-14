@@ -60,8 +60,15 @@
       "id": "u1",
       "name": "Admin Bruker",
       "role": "ADMIN",
-      "username": "mats",
-      "passwordHash": "03ac674216f3e15c761ee1a5e255f067953623c8b388b4459e13f978d7c846f4"
+      "username": "admin",
+      "pinCode": "Admin123!"
+    },
+    {
+      "id": "u2",
+      "name": "Operatør Kari",
+      "role": "OPERATOR",
+      "username": "operator",
+      "pinCode": "Operator123!"
     }
   ],
   "tickets": [
