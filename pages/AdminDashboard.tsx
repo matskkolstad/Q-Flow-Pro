@@ -45,10 +45,10 @@ const AdminDashboard: React.FC = () => {
     }, [isAdmin]);
 
   // Form States
-    const [newService, setNewService] = useState<Partial<Service>>({ name: '', prefix: '', color: 'bg-gray-500', estimatedTimePerPersonMinutes: 5, priority: 1 });
+    const [newService, setNewService] = useState<Omit<Service, 'id'>>({ name: '', prefix: '', color: 'bg-gray-500', estimatedTimePerPersonMinutes: 5, priority: 1, isOpen: true });
     const [newUser, setNewUser] = useState<{ name: string; username: string; role: 'ADMIN' | 'OPERATOR'; password: string }>({ name: '', username: '', role: 'OPERATOR', password: '' });
   const [newCounterName, setNewCounterName] = useState('');
-  const [newPrinter, setNewPrinter] = useState<Partial<Printer>>({ name: '', ipAddress: '', port: 9100, type: 'EPSON_IP' });
+  const [newPrinter, setNewPrinter] = useState<Omit<Printer, 'id' | 'status'>>({ name: '', ipAddress: '', port: 9100, type: 'EPSON_IP' });
     const [counterDisplayMessages, setCounterDisplayMessages] = useState<Record<string, string>>({});
     const [editingMessages, setEditingMessages] = useState<Set<string>>(new Set());
         const [pwdOld, setPwdOld] = useState('');
@@ -106,20 +106,20 @@ const AdminDashboard: React.FC = () => {
 
   const handleCreateService = () => {
       if(newService.name && newService.prefix) {
-          addService(newService as any);
-          setNewService({ name: '', prefix: '', color: 'bg-gray-500', estimatedTimePerPersonMinutes: 5, priority: 1 });
+          addService(newService);
+          setNewService({ name: '', prefix: '', color: 'bg-gray-500', estimatedTimePerPersonMinutes: 5, priority: 1, isOpen: true });
       }
   };
 
     const handleCreateUser = () => {
             if (!newUser.username || !newUser.password) return;
-            const payload = {
+            const payload: Omit<User, 'id'> & { password: string } = {
                 name: newUser.name || newUser.username,
                 username: newUser.username,
                 role: newUser.role,
                 password: newUser.password,
             };
-            addUser(payload as any);
+            addUser(payload);
             setNewUser({ name: '', username: '', role: 'OPERATOR', password: '' });
     };
 
@@ -132,7 +132,7 @@ const AdminDashboard: React.FC = () => {
 
   const handleAddPrinter = () => {
       if(newPrinter.name && newPrinter.ipAddress) {
-          addPrinter(newPrinter as any);
+          addPrinter(newPrinter);
           setNewPrinter({ name: '', ipAddress: '', port: 9100, type: 'EPSON_IP' });
       }
   };
@@ -945,7 +945,7 @@ const AdminDashboard: React.FC = () => {
                                 </div>
                                 <div>
                                     <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">{t('admin.users.role')}</label>
-                                    <select value={newUser.role} onChange={e => setNewUser({...newUser, role: e.target.value as any})} className="w-full border-2 border-gray-200 rounded-xl px-4 py-2.5 bg-white font-bold focus:border-indigo-500 outline-none">
+                                    <select value={newUser.role} onChange={e => setNewUser({...newUser, role: e.target.value as 'ADMIN' | 'OPERATOR'})} className="w-full border-2 border-gray-200 rounded-xl px-4 py-2.5 bg-white font-bold focus:border-indigo-500 outline-none">
                                         <option value="OPERATOR">{t('role.operator')}</option>
                                         <option value="ADMIN">{t('role.admin')}</option>
                                     </select>
