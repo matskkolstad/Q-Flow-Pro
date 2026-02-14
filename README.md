@@ -1,107 +1,118 @@
 <div align="center">
   <h1>Q-Flow Pro</h1>
-  <p>Kø- og skrankesystem med sanntid, offentlige visninger, kiosk, skrankeskjermer og administrasjon.</p>
+  <p>Queue and counter management with real-time updates, public displays, kiosk, counter screens, and admin panel.</p>
 </div>
 
-## Innhold
-- [Funksjoner](#funksjoner)
-- [Arkitektur](#arkitektur)
-- [Krav](#krav)
-- [Kjappstart (lokalt)](#kjappstart-lokalt)
-- [Miljøvariabler](#miljøvariabler)
-- [Bygg for produksjon](#bygg-for-produksjon)
-- [Kjøre som systemd-tjeneste](#kjøre-som-systemd-tjeneste)
+## Table of Contents
+- [Features](#features)
+- [Architecture](#architecture)
+- [Screenshots](#screenshots)
+- [Requirements](#requirements)
+- [Quick Start (local)](#quick-start-local)
+- [Environment Variables](#environment-variables)
+- [Production Build](#production-build)
+- [Run as systemd Service](#run-as-systemd-service)
 - [Docker / Compose](#docker--compose)
 - [Testing](#testing)
-- [Admin-funksjoner](#admin-funksjoner)
-- [Tilpasning av branding](#tilpasning-av-branding)
-- [Datastruktur og persistens](#datastruktur-og-persistens)
+- [Admin Capabilities](#admin-capabilities)
+- [Branding](#branding)
+- [Data & Persistence](#data--persistence)
+- [Operational Tips](#operational-tips)
 
-## Funksjoner
-- Trekk kølapper via kiosk, mobilklient eller operatør.
-- Sanntid via Socket.IO (køstatus, kall, meldinger).
-- Offentlig display for “nå betjenes” og venteliste, samt skrankeskjerm for innkalling.
-- Administrasjonspanel for tjenester, skranker, brukere, skrivere, meldinger, lyd og stenging.
-- Sikkerhet: sessions med TTL, passordpolicy, helmet-headere, sanitiserte innstillinger, valgfri CSP.
-- Backups av SQLite DB, loggrotasjon og helsesjekk-endepunkt.
+## Features
+- Pull tickets from kiosk, mobile client, or operator.
+- Real-time updates via Socket.IO (queue state, calls, messages).
+- Public display (“now serving”) and counter display for targeted calls.
+- Admin panel for services, counters, users, printers, announcements, sound, and closing.
+- Security: session TTL, password policy, helmet headers, sanitized settings, optional CSP.
+- SQLite persistence with backups, log rotation, and `/health` endpoint.
 
-## Arkitektur
-- Frontend: React + Vite (TypeScript), kjører på samme server i produksjon (build til `dist`).
-- Backend: Node.js + Express + Socket.IO, persistens i SQLite (`data/qflow.db`).
-- State og logging håndteres på server; klienter mottar “init-state” + “state-update”.
+## Architecture
+- Frontend: React + Vite (TypeScript). Built assets served from `dist` by the Node server.
+- Backend: Node.js + Express + Socket.IO. Persistence: SQLite (`data/qflow.db`).
+- Server owns state/logging; clients receive `init-state` + `state-update` events.
 
-## Krav
-- Node.js 18+ (anbefalt LTS).
-- NPM (følger med Node).
-- SQLite (inkludert i runtime, ingen ekstra installasjon nødvendig).
-- På server: systemd (valgfritt for drift) og tilgang til port 3000 (standard).
+## Screenshots
+Replace placeholders with your own captures (store in `docs/images/` or external links):
+- Admin dashboard: ![Admin Dashboard](https://via.placeholder.com/1200x600?text=Admin+Dashboard)
+- Public display: ![Public Display](https://via.placeholder.com/1200x600?text=Public+Display)
+- Counter display: ![Counter Display](https://via.placeholder.com/1200x600?text=Counter+Display)
+- Kiosk: ![Kiosk](https://via.placeholder.com/1200x600?text=Kiosk)
+- Mobile client: ![Mobile Client](https://via.placeholder.com/1200x600?text=Mobile+Client)
 
-## Kjappstart (lokalt)
+## Requirements
+- Node.js 18+ (LTS recommended)
+- npm (bundled with Node)
+- SQLite (embedded, no extra install)
+- For server deploy: systemd (optional) and open port 3000 (default)
+
+## Quick Start (local)
 ```sh
 npm install
-cp .env.example .env   # juster ved behov
-npm run dev             # Vite dev (frontend) og API via proxy til 3000
+cp .env.example .env   # adjust if needed
+npm run dev             # Vite dev on 5173, API proxied to 3000
 ```
-- Dev-frontend kjører på http://localhost:5173. Backend på http://localhost:3000.
-- Standard admin-brukere settes ved første oppstart (se `db.json` defaults: admin/Admin123!, operator/Operator123!). Bytt passord etter innlogging.
+- Frontend dev: http://localhost:5173
+- Backend: http://localhost:3000
+- Default users on first run (`db.json` defaults): admin/Admin123!, operator/Operator123! — change after login.
 
-## Miljøvariabler
-Se [.env.example](.env.example). Viktige nøkler:
-- `HOST` / `PORT`: binding (default 0.0.0.0:3000).
-- `ALLOWED_ORIGINS`: kommaseparerte URLer for CORS/WebSocket (legg til ditt domene ved drift).
-- `ENABLE_CSP`: sett `1` når frontend er verifisert for Content Security Policy.
-- `SESSION_TTL_HOURS`: levetid på session tokens.
-- `LOG_RETENTION_DAYS`, `BACKUP_RETENTION_DAYS`: rotasjon av logg/backup.
+## Environment Variables
+See [.env.example](.env.example). Key settings:
+- `HOST` / `PORT`: binding (default 0.0.0.0:3000)
+- `ALLOWED_ORIGINS`: comma-separated origins for CORS/WebSocket (add your domain for prod)
+- `ENABLE_CSP`: set `1` when frontend is CSP-clean
+- `SESSION_TTL_HOURS`: session lifetime
+- `LOG_RETENTION_DAYS`, `BACKUP_RETENTION_DAYS`: rotation periods
 
-## Bygg for produksjon
+## Production Build
 ```sh
 npm install
-npm run build    # tsc + vite build → dist/
-npm start        # node server.js (leser dist/ for statiske filer)
+npm run build    # tsc + Vite build → dist/
+npm start        # node server.js (serves dist/ and API)
 ```
-Serveren leser `ALLOWED_ORIGINS` for CORS/Socket.IO. Helse: `GET /health`.
+Health: `GET /health`.
 
-## Kjøre som systemd-tjeneste
-1. Kopier unit: `sudo cp systemd/qflow.service /etc/systemd/system/qflow.service`
-2. Opprett miljø: `/etc/qflow/qflow.env` (se .env.example) og sikre rettigheter (640, eier qflow).
-3. Lag bruker og eierskap (hvis ikke gjort): `sudo useradd --system --home /opt/qflow --shell /usr/sbin/nologin qflow` og `sudo chown -R qflow:qflow /opt/qflow /etc/qflow`.
-4. Reload og start: `sudo systemctl daemon-reload && sudo systemctl enable --now qflow.service`
-5. Status/logg: `systemctl status qflow.service` og `journalctl -u qflow.service -f`
+## Run as systemd Service
+1) Copy unit: `sudo cp systemd/qflow.service /etc/systemd/system/qflow.service`
+2) Environment: `/etc/qflow/qflow.env` (see .env.example) with permissions 640, owner `qflow`
+3) User/ownership: `sudo useradd --system --home /opt/qflow --shell /usr/sbin/nologin qflow` and `sudo chown -R qflow:qflow /opt/qflow /etc/qflow`
+4) Reload and start: `sudo systemctl daemon-reload && sudo systemctl enable --now qflow.service`
+5) Status/logs: `systemctl status qflow.service` and `journalctl -u qflow.service -f`
 
-Uniten kjører som bruker `qflow`, peker til `/opt/qflow`, laster `/etc/qflow/qflow.env`, restarter on-failure.
+Unit runs as user `qflow`, loads `/etc/qflow/qflow.env`, restarts on failure.
 
 ## Docker / Compose
-Bygg image:
+Build image:
 ```sh
 docker build -t qflow-pro .
 ```
-Kjør med docker-compose (se `docker-compose.yml`):
+Compose (see `docker-compose.yml`):
 ```sh
 docker-compose up -d
 ```
-Eksponerer port 3000. Juster miljøvariabler i compose-fila eller `.env` som refereres der.
+Exposes port 3000. Set env vars via compose or an `.env` file referenced there.
 
 ## Testing
-- E2E med Playwright: `npm run test:e2e`
-- Basis helsesjekk: `curl http://localhost:3000/health`
+- E2E (Playwright): `npm run test:e2e`
+- Health check: `curl http://localhost:3000/health`
 
-## Admin-funksjoner
-- Logg inn på / (root) med admin-konto.
-- Oppdater tjenester, skranker, brukere, skrivere, meldinger, lyd, stenging.
-- Backup: POST `/api/admin/backup` (via UI eller direkte), liste `/api/admin/backups`, nedlasting `/api/admin/backup/:file`.
+## Admin Capabilities
+- Login at `/` with admin account.
+- Manage services, counters, users, printers, announcements, sounds, closing/opening.
+- Backups: POST `/api/admin/backup`, list `/api/admin/backups`, download `/api/admin/backup/:file`.
 
-## Tilpasning av branding
-- I Admin → Generelt: sett `brandText` og `brandLogoUrl` (base64/url). Tom `brandText` skjuler teksten.
-- Logo-komponenten tillater egen logo + tekst; fallback er “Q-Flow Pro” hvis feltet er tomt/ikke satt.
-- Tekstfarger styres av `textClass` der komponenten brukes; mørke bakgrunner bruker hvit tekst.
+## Branding
+- Admin → General: set `brandText` and `brandLogoUrl` (base64/url). Empty `brandText` hides the text.
+- Logo component allows custom logo + text; fallback is “Q-Flow Pro” only when text is unset.
+- Text color is controlled per usage via `textClass` (dark UIs use white text).
 
-## Datastruktur og persistens
-- SQLite DB i `data/qflow.db`; backups i `data/backups/`; logger i `data/logs/` (ignorert i git).
-- Server state lastes fra DB ved oppstart og lagres ved endringer (innstillinger, billetter, brukere m.m.).
-- Sessions lagres i state med TTL (konfigurerbar via `SESSION_TTL_HOURS`).
+## Data & Persistence
+- SQLite DB at `data/qflow.db`; backups at `data/backups/`; logs at `data/logs/` (all git-ignored).
+- Server loads state from DB on boot and persists changes (settings, tickets, users, etc.).
+- Sessions stored in state with TTL (`SESSION_TTL_HOURS`).
 
-## Driftstips
-- Sett `ALLOWED_ORIGINS` til faktiske domener før prod.
-- Plasser bak en HTTPS reverse proxy (Nginx/Caddy) med TLS og ev. HSTS.
-- Vurder å aktivere CSP (ENABLE_CSP=1) når alle assets er kompatible.
-- Rotasjon av backups/logg er på plass; verifiser diskplass og ta offsite-kopi etter behov.
+## Operational Tips
+- Set `ALLOWED_ORIGINS` to real domains before production.
+- Place behind HTTPS reverse proxy (Nginx/Caddy) with TLS and optionally HSTS.
+- Enable CSP (ENABLE_CSP=1) when assets are CSP-ready.
+- Backup/log rotation is built-in; monitor disk and keep offsite copies if needed.
