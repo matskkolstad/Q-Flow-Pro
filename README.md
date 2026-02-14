@@ -3,6 +3,12 @@
   <p>Queue and counter management with real-time updates, public displays, kiosk, counter screens, and admin panel.</p>
 </div>
 
+## Documentation
+- **[Installation Guide](INSTALLATION.md)** - Complete setup instructions and testing guide
+- **[Security Audit](SECURITY_AUDIT.md)** - Known vulnerabilities and security considerations
+- **[CLI Documentation](docs/cli.en.md)** - Command-line user management ([Norwegian version](docs/cli.md))
+- **[systemd Setup](docs/systemd.en.md)** - Linux service configuration ([Norwegian version](docs/systemd.md))
+
 ## Table of Contents
 - [Features](#features)
 - [Architecture](#architecture)
