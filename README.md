@@ -5,6 +5,7 @@
 
 ## Documentation
 - **[Installation Guide](INSTALLATION.md)** - Complete setup instructions and testing guide
+- **[Review Summary](REVIEW_SUMMARY.md)** - Comprehensive review results ([Norwegian version](GJENNOMGANG.md))
 - **[Security Audit](SECURITY_AUDIT.md)** - Known vulnerabilities and security considerations
 - **[CLI Documentation](docs/cli.en.md)** - Command-line user management ([Norwegian version](docs/cli.md))
 - **[systemd Setup](docs/systemd.en.md)** - Linux service configuration ([Norwegian version](docs/systemd.md))
