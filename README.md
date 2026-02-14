@@ -3,6 +3,13 @@
   <p>Queue and counter management with real-time updates, public displays, kiosk, counter screens, and admin panel.</p>
 </div>
 
+## Documentation
+- **[Installation Guide](INSTALLATION.md)** - Complete setup instructions and testing guide
+- **[Review Summary](REVIEW_SUMMARY.md)** - Comprehensive review results ([Norwegian version](GJENNOMGANG.md))
+- **[Security Audit](SECURITY_AUDIT.md)** - Known vulnerabilities and security considerations
+- **[CLI Documentation](docs/cli.en.md)** - Command-line user management ([Norwegian version](docs/cli.md))
+- **[systemd Setup](docs/systemd.en.md)** - Linux service configuration ([Norwegian version](docs/systemd.md))
+
 ## Table of Contents
 - [Features](#features)
 - [Architecture](#architecture)
@@ -55,7 +62,8 @@ npm run dev             # Vite dev on 5173, API proxied to 3000
 ```
 - Frontend dev: http://localhost:5173
 - Backend: http://localhost:3000
-- Default users on first run (`db.json` defaults): admin/Admin123!, operator/Operator123! — change after login.
+- **Default users on first run** (`db.json` defaults): admin/Admin123!, operator/Operator123!
+- ⚠️ **SECURITY WARNING**: Change default passwords immediately after first login! These credentials are publicly documented and should never be used in production.
 
 ## Environment Variables
 See [.env.example](.env.example). Key settings:
@@ -117,6 +125,16 @@ Exposes port 3000. Set env vars via compose or an `.env` file referenced there.
 - Place behind HTTPS reverse proxy (Nginx/Caddy) with TLS and optionally HSTS.
 - Enable CSP (ENABLE_CSP=1) when assets are CSP-ready.
 - Backup/log rotation is built-in; monitor disk and keep offsite copies if needed.
+
+## Security Considerations
+- **Default Passwords**: Change admin and operator passwords immediately after installation!
+- **Reverse Proxy**: Always deploy behind a reverse proxy (Nginx, Caddy, Apache) with:
+  - HTTPS/TLS termination
+  - Rate limiting on `/api/login` and `/api/*` endpoints
+  - Optional CSRF protection
+- **Network**: Restrict access to trusted networks or use VPN for admin access.
+- **Updates**: Regularly update dependencies to patch security vulnerabilities.
+- **Backups**: Keep secure, offsite backups of the database and configuration.
 
 ## User Management (GUI & CLI)
 

@@ -9,7 +9,7 @@ const QueueContext = createContext<QueueContextType | undefined>(undefined);
 // Resolve Socket.IO endpoint (works for dev on 5173 -> 3000, or same-origin in prod)
 const socketBase = (() => {
     if (typeof window === 'undefined') return undefined;
-    const envUrl = (import.meta as any)?.env?.VITE_SOCKET_URL;
+    const envUrl = import.meta.env.VITE_SOCKET_URL;
     if (envUrl) return envUrl;
     const { protocol, hostname, port } = window.location;
     // If frontend is not served from backend port 3000 (e.g., Vite dev on 5173), point to backend:3000
@@ -34,7 +34,7 @@ const socket: Socket = io(socketBase, {
 });
 
 export const QueueProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
-    const { language } = useI18n();
+    const { language, t } = useI18n();
   // Initial empty state (will be populated by server)
   const [services, setServices] = useState<Service[]>([]);
   const [counters, setCounters] = useState<Counter[]>([]);
@@ -128,12 +128,12 @@ export const QueueProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         };
         const onDisconnect = (reason?: any) => {
             setIsConnected(false);
-            setLastError(typeof reason === 'string' ? reason : 'Koblingen ble brutt');
+            setLastError(typeof reason === 'string' ? reason : t('common.error.connectionLost'));
         };
         const onConnectError = (err: any) => {
             console.warn('Socket connect_error', err?.message || err);
             setIsConnected(false);
-            setLastError(err?.message || 'Fikk ikke kontakt med server');
+            setLastError(err?.message || t('common.error.cannotReachServer'));
         };
         const onReconnect = () => setIsConnected(true);
 

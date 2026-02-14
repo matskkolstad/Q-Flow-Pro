@@ -24,6 +24,8 @@ const translations: Translations = {
     'common.language': 'Language',
     'common.save': 'Save',
     'admin.language.help': 'Choose interface language. Applies to this browser.',
+    'common.error.connectionLost': 'Connection lost',
+    'common.error.cannotReachServer': 'Cannot reach server',
 
     // Home
     'home.title': 'Welcome',
@@ -301,6 +303,8 @@ const translations: Translations = {
     'common.language': 'Språk',
     'common.save': 'Lagre',
     'admin.language.help': 'Velg grensesnittspråk. Gjelder for denne nettleseren.',
+    'common.error.connectionLost': 'Koblingen ble brutt',
+    'common.error.cannotReachServer': 'Fikk ikke kontakt med server',
 
     // Home
     'home.title': 'Velkommen',
