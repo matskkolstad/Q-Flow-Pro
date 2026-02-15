@@ -13,10 +13,11 @@ type ViewTab = 'dashboard' | 'logs' | 'settings';
 const AdminDashboard: React.FC = () => {
           const { 
                     counters, tickets, logs, users, services, printers, kiosks, counterDisplays, isClosed, publicMessage, soundSettings, branding, kioskExitPin, setPublicMessage, setSoundSettings, setBranding, setKioskExitPin, setSystemClosed, triggerSound, reportError,
-                            callNextTicket, callSpecificTicket, updateTicketStatus, deleteTicket,
+                callNextTicket, callSpecificTicket, updateTicketStatus, deleteTicket,
         addService, updateService, removeService, addCounter, removeCounter, updateCounter, addUser, updateUser, removeUser,
             addPrinter, removePrinter, assignPrinterToKiosk, removeKiosk, assignCounterDisplay, setCounterDisplayMessage, removeCounterDisplay,
-        resetSystem, updateCounterStatus
+        resetSystem, updateCounterStatus,
+        getWaitTime
         } = useQueue();
     const { user, token, logout } = useAuth();
     const { language, setLanguage, t } = useI18n();
