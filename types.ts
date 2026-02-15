@@ -23,6 +23,9 @@ export interface User {
   passwordHash?: string; // stored hashed
   pinCode?: string; // legacy
   mustChangePassword?: boolean; // Force password change on next login
+  email?: string; // Email from external auth provider
+  externalId?: string; // ID from external auth provider (e.g., Google ID, OIDC sub)
+  provider?: 'local' | 'google' | 'oidc'; // Authentication provider
 }
 
 export interface Ticket {
@@ -80,6 +83,25 @@ export interface SoundSettings {
   callVoice: boolean;
 }
 
+export interface AuthProviderConfig {
+  google: {
+    enabled: boolean;
+    clientId: string;
+    clientSecret: string;
+    allowedDomains?: string[]; // Optional: restrict to specific Google Workspace domains
+    autoProvision: boolean; // Auto-create users on first login
+    defaultRole: 'ADMIN' | 'OPERATOR'; // Default role for auto-provisioned users
+  };
+  oidc: {
+    enabled: boolean;
+    issuerUrl: string;
+    clientId: string;
+    clientSecret: string;
+    autoProvision: boolean;
+    defaultRole: 'ADMIN' | 'OPERATOR';
+  };
+}
+
 export interface LogEntry {
   id: string;
   timestamp: number;
@@ -101,10 +123,12 @@ export interface QueueContextType {
   publicMessage: string;
   branding: BrandingConfig;
   kioskExitPin: string;
+  authProviders: AuthProviderConfig;
   setPublicMessage: (msg: string) => void;
   setSoundSettings: (settings: Partial<SoundSettings>) => void;
   setBranding: (branding: Partial<BrandingConfig>) => void;
   setKioskExitPin: (pin: string) => void;
+  setAuthProviders: (config: Partial<AuthProviderConfig>) => void;
   
   // Ticket Actions
   addTicket: (serviceId: string) => Promise<Ticket>;

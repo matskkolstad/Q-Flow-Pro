@@ -1,4 +1,6 @@
 import express from 'express';
+import session from 'express-session';
+import passport from 'passport';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
 import { fileURLToPath } from 'url';
@@ -10,6 +12,7 @@ import fs from 'fs';
 import helmet from 'helmet';
 import sharp from 'sharp';
 import { loadState as loadStateFromStore, saveState as saveStateToStore, backupDatabase, listBackups } from './lib/stateStore.js';
+import { initializePassport, isGoogleConfigured, isOIDCConfigured } from './lib/passportConfig.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -72,6 +75,22 @@ app.use(helmet({
   hidePoweredBy: true,
 }));
 
+// Session configuration for OAuth
+app.use(session({
+  secret: process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex'),
+  resave: false,
+  saveUninitialized: false,
+  cookie: {
+    secure: process.env.NODE_ENV === 'production',
+    httpOnly: true,
+    maxAge: 24 * 60 * 60 * 1000 // 24 hours
+  }
+}));
+
+// Initialize Passport
+app.use(passport.initialize());
+app.use(passport.session());
+
 io.engine.on('connection_error', (err) => {
   addLog(`Socket handshake feilet: ${err?.code || err?.message || 'ukjent'} (${err?.context || ''})`, 'ALERT');
 });
@@ -113,7 +132,25 @@ const DEFAULT_STATE = {
   },
   kioskExitPin: '1234',
   logs: [],
-  publicMessage: ""
+  publicMessage: "",
+  authProviders: {
+    google: {
+      enabled: false,
+      clientId: process.env.GOOGLE_CLIENT_ID || '',
+      clientSecret: process.env.GOOGLE_CLIENT_SECRET || '',
+      allowedDomains: [],
+      autoProvision: false,
+      defaultRole: 'OPERATOR'
+    },
+    oidc: {
+      enabled: false,
+      issuerUrl: process.env.OIDC_ISSUER_URL || '',
+      clientId: process.env.OIDC_CLIENT_ID || '',
+      clientSecret: process.env.OIDC_CLIENT_SECRET || '',
+      autoProvision: false,
+      defaultRole: 'OPERATOR'
+    }
+  }
 };
 
 const SESSION_TTL_MS = Number(process.env.SESSION_TTL_HOURS || 12) * 60 * 60 * 1000;
@@ -357,6 +394,33 @@ state.users = (state.users || []).map((u, idx) => {
 if (forcedFlagChange) {
   saveState();
 }
+
+// Ensure authProviders exists with defaults
+if (!state.authProviders) {
+  state.authProviders = {
+    google: {
+      enabled: false,
+      clientId: process.env.GOOGLE_CLIENT_ID || '',
+      clientSecret: process.env.GOOGLE_CLIENT_SECRET || '',
+      allowedDomains: [],
+      autoProvision: false,
+      defaultRole: 'OPERATOR'
+    },
+    oidc: {
+      enabled: false,
+      issuerUrl: process.env.OIDC_ISSUER_URL || '',
+      clientId: process.env.OIDC_CLIENT_ID || '',
+      clientSecret: process.env.OIDC_CLIENT_SECRET || '',
+      autoProvision: false,
+      defaultRole: 'OPERATOR'
+    }
+  };
+  saveState();
+}
+
+// Initialize Passport strategies based on current configuration
+initializePassport(state, createSession);
+
 const getSession = (token) => {
   if (!token || !state.sessions) return null;
   const session = state.sessions[token];
@@ -828,6 +892,94 @@ app.post('/api/user/password', (req, res) => {
   return res.json({ ok: true });
 });
 
+// --- OAuth / OIDC Authentication Routes ---
+
+// Get available auth providers (for login page)
+app.get('/api/auth/providers', (req, res) => {
+  const providers = {
+    local: true,
+    google: isGoogleConfigured(state),
+    oidc: isOIDCConfigured(state)
+  };
+  return res.json(providers);
+});
+
+// Google OAuth routes
+app.get('/auth/google', (req, res, next) => {
+  if (!isGoogleConfigured(state)) {
+    return res.status(400).json({ error: 'Google authentication not configured' });
+  }
+  passport.authenticate('google', { scope: ['profile', 'email'] })(req, res, next);
+});
+
+app.get('/auth/google/callback', (req, res, next) => {
+  if (!isGoogleConfigured(state)) {
+    return res.status(400).json({ error: 'Google authentication not configured' });
+  }
+  
+  passport.authenticate('google', { session: false, failureRedirect: '/login?error=google_auth_failed' }, (err, user, info) => {
+    if (err) {
+      addLog(`Google OAuth error: ${err.message || err}`, 'ALERT');
+      return res.redirect('/login?error=google_auth_failed');
+    }
+    
+    if (!user) {
+      const message = info?.message || 'Authentication failed';
+      addLog(`Google OAuth failed: ${message}`, 'ALERT');
+      return res.redirect(`/login?error=${encodeURIComponent(message)}`);
+    }
+    
+    // Save user changes
+    saveState();
+    
+    // Create session token
+    const token = createSession(user.id);
+    const ip = req.ip || req.headers['x-forwarded-for'] || 'unknown';
+    addLog(`Google OAuth innlogging vellykket for ${user.username} (${user.role}) fra ${ip}`, 'ACTION');
+    
+    // Redirect to frontend with token
+    return res.redirect(`/login?token=${token}`);
+  })(req, res, next);
+});
+
+// OIDC routes
+app.get('/auth/oidc', (req, res, next) => {
+  if (!isOIDCConfigured(state)) {
+    return res.status(400).json({ error: 'OIDC authentication not configured' });
+  }
+  passport.authenticate('oidc')(req, res, next);
+});
+
+app.get('/auth/oidc/callback', (req, res, next) => {
+  if (!isOIDCConfigured(state)) {
+    return res.status(400).json({ error: 'OIDC authentication not configured' });
+  }
+  
+  passport.authenticate('oidc', { session: false, failureRedirect: '/login?error=oidc_auth_failed' }, (err, user, info) => {
+    if (err) {
+      addLog(`OIDC OAuth error: ${err.message || err}`, 'ALERT');
+      return res.redirect('/login?error=oidc_auth_failed');
+    }
+    
+    if (!user) {
+      const message = info?.message || 'Authentication failed';
+      addLog(`OIDC OAuth failed: ${message}`, 'ALERT');
+      return res.redirect(`/login?error=${encodeURIComponent(message)}`);
+    }
+    
+    // Save user changes
+    saveState();
+    
+    // Create session token
+    const token = createSession(user.id);
+    const ip = req.ip || req.headers['x-forwarded-for'] || 'unknown';
+    addLog(`OIDC innlogging vellykket for ${user.username} (${user.role}) fra ${ip}`, 'ACTION');
+    
+    // Redirect to frontend with token
+    return res.redirect(`/login?token=${token}`);
+  })(req, res, next);
+});
+
 const actorLabel = (socket) => {
   const role = socket?.data?.authRole || 'PUBLIC';
   const uid = socket?.data?.userId;
@@ -1153,6 +1305,27 @@ io.on('connection', (socket) => {
       }
       if (Object.prototype.hasOwnProperty.call(next, 'kioskExitPin')) {
         state.kioskExitPin = String(next.kioskExitPin || '');
+      }
+      if (next.authProviders) {
+        // Update auth provider configuration
+        if (next.authProviders.google) {
+          state.authProviders.google = { 
+            ...state.authProviders.google, 
+            ...safe(next.authProviders.google),
+            allowedDomains: Array.isArray(next.authProviders.google.allowedDomains) 
+              ? next.authProviders.google.allowedDomains.filter(d => typeof d === 'string' && d.trim().length > 0)
+              : state.authProviders.google.allowedDomains
+          };
+        }
+        if (next.authProviders.oidc) {
+          state.authProviders.oidc = { 
+            ...state.authProviders.oidc, 
+            ...safe(next.authProviders.oidc) 
+          };
+        }
+        // Reinitialize passport with new configuration
+        initializePassport(state, createSession);
+        changes.push('auth-providers');
       }
 
       saveState();
