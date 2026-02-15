@@ -95,7 +95,34 @@ const AdminDashboard: React.FC = () => {
 
   const currentCounter = counters.find(c => c.id === activeCounterId);
   const waitingTickets = tickets.filter(t => t.status === TicketStatus.WAITING).sort((a,b) => a.createdAt - b.createdAt);
-  const avgWaitTime = 12; // Placeholder for real calc
+  const avgWaitTime = useMemo(() => {
+      if (waitingTickets.length === 0) return 0;
+
+      // Estimate per-ticket wait based on position in queue, service speed, and active counters per service
+      const byService = services.reduce<Record<string, { tickets: typeof waitingTickets; service: Service }>>((acc, svc) => {
+          acc[svc.id] = { tickets: waitingTickets.filter(t => t.serviceId === svc.id), service: svc };
+          return acc;
+      }, {});
+
+      let totalMinutes = 0;
+      let totalCount = 0;
+
+      Object.values(byService).forEach(({ tickets: svcTickets, service }) => {
+          if (svcTickets.length === 0) return;
+          const active = counters.filter(c => c.isOnline && c.activeServiceIds.includes(service.id)).length;
+          const perPerson = service.estimatedTimePerPersonMinutes || 5;
+          const lanes = active > 0 ? active : 1;
+
+          svcTickets.forEach((_, idx) => {
+              const laneTurn = Math.floor(idx / lanes); // how many service durations before this ticket reaches a counter
+              totalMinutes += (laneTurn + 1) * perPerson;
+              totalCount += 1;
+          });
+      });
+
+      if (totalCount === 0) return 0;
+      return Math.round(totalMinutes / totalCount);
+  }, [waitingTickets, services, counters]);
   const totalServed = tickets.filter(t => t.status === TicketStatus.COMPLETED).length;
 
     const handleComplete = () => {
