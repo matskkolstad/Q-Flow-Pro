@@ -418,9 +418,6 @@ if (!state.authProviders) {
   saveState();
 }
 
-// Initialize Passport strategies based on current configuration
-initializePassport(state, createSession);
-
 const getSession = (token) => {
   if (!token || !state.sessions) return null;
   const session = state.sessions[token];
@@ -441,6 +438,9 @@ const createSession = (userId) => {
   saveState();
   return token;
 };
+
+// Initialize Passport strategies after createSession is defined
+initializePassport(state, createSession);
 
 // Forward declaration of addLog (full implementation later after routes)
 let addLog = (message, type = 'INFO') => {
