@@ -3,6 +3,28 @@
   <p>Queue and counter management with real-time updates, public displays, kiosk, counter screens, and admin panel.</p>
 </div>
 
+## ⚠️ Important Disclaimer
+
+**This application is entirely developed using Artificial Intelligence (AI).**
+
+The owner of this software makes **NO WARRANTIES** and assumes **NO LIABILITY** for:
+- ❌ Software defects, bugs, or errors
+- ❌ Security vulnerabilities or breaches  
+- ❌ Data loss, corruption, or integrity issues
+- ❌ Compliance with laws, regulations, or standards
+- ❌ Fitness for any particular purpose
+
+**BY USING THIS SOFTWARE, YOU ACCEPT FULL RESPONSIBILITY FOR:**
+- ✅ Testing and validating the software for your use case
+- ✅ Implementing appropriate security measures
+- ✅ Conducting security audits and vulnerability assessments
+- ✅ Ensuring compliance with applicable requirements
+- ✅ Any consequences resulting from use of this software
+
+**USE AT YOUR OWN RISK.** See [LICENSE](LICENSE) for complete terms.
+
+---
+
 ## Documentation
 - **[Installation Guide](INSTALLATION.md)** - Complete setup instructions and testing guide
 - **[Review Summary](REVIEW_SUMMARY.md)** - Comprehensive review results ([Norwegian version](GJENNOMGANG.md))
@@ -220,3 +242,19 @@ Guards: cannot delete or demote last admin (`at_least_one_admin_required`).
 9) **Backups**: Admin → Backup (or API); downloads SQLite snapshot.
 
 Tip: Role separation — operators can serve tickets but not manage users/settings; admins can do all operations.
+
+## License
+
+Copyright (c) 2026 Mats Kolstad. All rights reserved.
+
+This software is provided under a **Proprietary License**. See [LICENSE](LICENSE) for full terms.
+
+**Summary:**
+- ✅ You MAY view, use, and modify the software for your own purposes
+- ❌ You MAY NOT distribute, sell, or sublicense without written permission
+- ⚠️ Software is provided "AS IS" with NO WARRANTIES
+- ⚠️ Entire application is AI-generated - use at your own risk
+
+For distribution, commercial licensing, or other inquiries, contact **matskkolstad** via GitHub.
+
+**AI Disclaimer:** This application is entirely developed using Artificial Intelligence. The owner accepts no liability for errors, bugs, security issues, or any consequences of use. Users assume full responsibility for testing, security, and compliance.

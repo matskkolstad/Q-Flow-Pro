@@ -431,6 +431,34 @@ npm run user-cli -- update \
 - **Issues**: Report bugs on GitHub Issues
 - **Security**: See SECURITY_AUDIT.md for known vulnerabilities
 
-## License
+## License and Disclaimer
 
-See LICENSE file for details.
+**Copyright (c) 2026 Mats Kolstad. All rights reserved.**
+
+This software is provided under a **Proprietary License**. See [LICENSE](LICENSE) file for complete terms.
+
+### License Summary
+
+- ✅ **Allowed**: View source, use for personal/internal purposes, modify for own use
+- ❌ **Prohibited**: Distribution, selling, sublicensing without written permission
+- 📧 **Contact**: matskkolstad via GitHub for licensing inquiries
+
+### AI Development Disclaimer
+
+⚠️ **IMPORTANT**: This entire application has been developed using Artificial Intelligence (AI).
+
+**The owner makes NO WARRANTIES and accepts NO LIABILITY for:**
+- Software defects, bugs, or errors
+- Security vulnerabilities or breaches
+- Data loss or corruption
+- Compliance with laws or regulations
+- Any damages arising from use
+
+**By using this software, you agree to:**
+- Accept full responsibility for testing and validation
+- Implement appropriate security measures
+- Conduct your own security audits
+- Ensure compliance with applicable requirements
+- Assume all risks associated with use
+
+**USE AT YOUR OWN RISK.**

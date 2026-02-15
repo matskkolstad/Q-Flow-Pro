@@ -2,6 +2,25 @@
 
 This guide provides security recommendations for deploying and operating Q-Flow Pro in production environments.
 
+## ⚠️ Critical Disclaimer
+
+**This application is entirely developed using Artificial Intelligence (AI).**
+
+- ❌ The owner makes **NO WARRANTIES** and accepts **NO LIABILITY**
+- ❌ No guarantee of security, reliability, or fitness for purpose
+- ❌ Use at your own risk with full responsibility
+
+**Before deploying in production:**
+1. ✅ Conduct independent security audits
+2. ✅ Perform comprehensive penetration testing
+3. ✅ Implement additional security measures as needed
+4. ✅ Ensure compliance with your security requirements
+5. ✅ Have qualified personnel review all security aspects
+
+See [LICENSE](LICENSE) for complete terms.
+
+---
+
 ## Table of Contents
 1. [Initial Setup](#initial-setup)
 2. [Network Security](#network-security)

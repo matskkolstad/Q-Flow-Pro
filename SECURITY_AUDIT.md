@@ -2,6 +2,26 @@
 
 ## Date: 2026-02-15
 
+## ⚠️ AI Development Disclaimer
+
+**IMPORTANT NOTICE**: This application is entirely developed using Artificial Intelligence (AI).
+
+The owner makes **NO WARRANTIES** of any kind and assumes **NO LIABILITY** for:
+- Security vulnerabilities or breaches
+- Software defects, bugs, or errors
+- Data loss, corruption, or integrity issues
+- Compliance with security standards or regulations
+
+**Users are solely responsible for:**
+- Conducting independent security assessments
+- Implementing appropriate security measures
+- Testing and validating all security features
+- Ensuring compliance with applicable requirements
+
+**USE AT YOUR OWN RISK.** See [LICENSE](LICENSE) for complete terms.
+
+---
+
 ## Security Enhancements (Latest Update)
 
 ### New Security Features Implemented
