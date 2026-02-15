@@ -61,6 +61,15 @@ app.use(helmet({
     }
   } : false,
   crossOriginEmbedderPolicy: false,
+  hsts: {
+    maxAge: 31536000, // 1 year
+    includeSubDomains: true,
+    preload: true,
+  },
+  referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
+  noSniff: true,
+  xssFilter: true,
+  hidePoweredBy: true,
 }));
 
 io.engine.on('connection_error', (err) => {
@@ -161,6 +170,75 @@ const isLoginBlocked = (ip) => {
   const recent = list.filter((t) => now - t < LOGIN_WINDOW_MS);
   loginAttempts.set(ip, recent);
   return recent.length >= MAX_LOGIN_ATTEMPTS;
+};
+
+// General API rate limiting
+const apiRateLimits = new Map(); // ip -> { timestamps: [], blocked: false, blockExpiry: 0 }
+const MAX_API_REQUESTS = 100; // Max requests per window
+const API_RATE_WINDOW_MS = 60 * 1000; // 1 minute window
+const API_BLOCK_DURATION_MS = 5 * 60 * 1000; // 5 minute block
+const checkApiRateLimit = (ip) => {
+  const now = Date.now();
+  let entry = apiRateLimits.get(ip) || { timestamps: [], blocked: false, blockExpiry: 0 };
+  
+  // Check if currently blocked
+  if (entry.blocked && entry.blockExpiry > now) {
+    return { allowed: false, remaining: 0, blockExpiry: entry.blockExpiry };
+  }
+  
+  // Unblock if block period expired
+  if (entry.blocked && entry.blockExpiry <= now) {
+    entry = { timestamps: [], blocked: false, blockExpiry: 0 };
+  }
+  
+  // Clean old timestamps
+  const recent = entry.timestamps.filter((t) => now - t < API_RATE_WINDOW_MS);
+  
+  // Check if limit exceeded
+  if (recent.length >= MAX_API_REQUESTS) {
+    entry.blocked = true;
+    entry.blockExpiry = now + API_BLOCK_DURATION_MS;
+    entry.timestamps = recent;
+    apiRateLimits.set(ip, entry);
+    return { allowed: false, remaining: 0, blockExpiry: entry.blockExpiry };
+  }
+  
+  // Add current request
+  recent.push(now);
+  entry.timestamps = recent;
+  apiRateLimits.set(ip, entry);
+  
+  return { allowed: true, remaining: MAX_API_REQUESTS - recent.length };
+};
+
+// Middleware: General API rate limiting
+const apiRateLimiter = (req, res, next) => {
+  // Skip rate limiting for health endpoint
+  if (req.path === '/health') return next();
+  
+  // Apply rate limiting to API endpoints only
+  if (!req.path.startsWith('/api/')) return next();
+  
+  const ip = req.ip || req.headers['x-forwarded-for'] || 'unknown';
+  const check = checkApiRateLimit(ip);
+  
+  // Set rate limit headers
+  res.setHeader('X-RateLimit-Limit', MAX_API_REQUESTS.toString());
+  res.setHeader('X-RateLimit-Remaining', check.remaining.toString());
+  res.setHeader('X-RateLimit-Reset', new Date(Date.now() + API_RATE_WINDOW_MS).toISOString());
+  
+  if (!check.allowed) {
+    const resetTime = new Date(check.blockExpiry).toISOString();
+    res.setHeader('Retry-After', Math.ceil((check.blockExpiry - Date.now()) / 1000).toString());
+    addLog(`API rate limit exceeded for ${ip}, blocked until ${resetTime}`, 'ALERT');
+    return res.status(429).json({ 
+      error: 'rate_limit_exceeded', 
+      message: 'Too many requests. Please try again later.',
+      retryAfter: resetTime
+    });
+  }
+  
+  next();
 };
 
 // IP whitelist validation (supports CIDR notation)
@@ -411,6 +489,9 @@ setInterval(async () => {
     io.emit('state-update', state);
   }
 })();
+
+// Apply API rate limiting before routes
+app.use(apiRateLimiter);
 
 // --- REST: server-side printing to avoid browser CORS/mixed-content ---
 app.post('/api/print-ticket', requireAllowedIP, requireApiKey, async (req, res) => {
