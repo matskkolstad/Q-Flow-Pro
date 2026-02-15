@@ -128,6 +128,8 @@ const BACKUP_RETENTION_DAYS = Number(process.env.BACKUP_RETENTION_DAYS || 30);
 const SLOW_REQUEST_MS = 1200;
 const WAITING_ALERT_THRESHOLD = 50;
 const WAITING_ALERT_INTERVAL_MS = 5 * 60 * 1000;
+const DEFAULT_ADMIN_USERNAME = 'admin';
+const DEFAULT_OPERATOR_USERNAME = 'operator';
 let lastQueueAlertAt = 0;
 const isSha256 = (hash = '') => /^[a-f0-9]{64}$/i.test(hash);
 const hashPassword = (pw = '') => bcrypt.hashSync(pw, BCRYPT_ROUNDS);
@@ -332,7 +334,7 @@ state.users = (state.users || []).map((u, idx) => {
   if (!passwordHash || passwordHash.length === 0) {
     passwordHash = hashPassword(u.pinCode || username);
     // If password was auto-generated from username, require change on first login
-    if ((username === 'admin' || username === 'operator') && !u.pinCode) {
+    if ((username === DEFAULT_ADMIN_USERNAME || username === DEFAULT_OPERATOR_USERNAME) && !u.pinCode) {
       mustChangePassword = true;
     }
   } else if (!passwordHash.startsWith('$2') && isSha256(passwordHash)) {
@@ -364,7 +366,7 @@ const createSession = (userId) => {
 // Forward declaration of addLog (full implementation later after routes)
 let addLog = (message, type = 'INFO') => {
   const log = {
-    id: Math.random().toString(36).substr(2, 9),
+    id: Math.random().toString(36).slice(2, 11),
     timestamp: Date.now(),
     message,
     type
@@ -937,7 +939,7 @@ io.on('connection', (socket) => {
     const nextNum = (maxNum + 1).toString().padStart(3, '0');
 
     const newTicket = {
-      id: Math.random().toString(36).substr(2, 9),
+      id: Math.random().toString(36).slice(2, 11),
       number: `${service.prefix}${nextNum}`,
       serviceId,
       status: 'WAITING',
@@ -1048,7 +1050,7 @@ io.on('connection', (socket) => {
       const changes = [];
       if (Array.isArray(next.services)) {
         state.services = next.services.map((s) => ({
-          id: s.id || Math.random().toString(36).substr(2, 9),
+          id: s.id || Math.random().toString(36).slice(2, 11),
           name: cleanText(s.name, 80) || 'Tjeneste',
           prefix: (cleanText(s.prefix, 2).toUpperCase() || 'X'),
           color: s.color || 'bg-gray-500',
@@ -1060,7 +1062,7 @@ io.on('connection', (socket) => {
       }
       if (Array.isArray(next.counters)) {
         state.counters = next.counters.map((c) => ({
-          id: c.id || Math.random().toString(36).substr(2, 9),
+          id: c.id || Math.random().toString(36).slice(2, 11),
           name: cleanText(c.name, 80) || 'Skranke',
           activeServiceIds: Array.isArray(c.activeServiceIds) ? c.activeServiceIds.filter((id) => typeof id === 'string' && id.length > 0) : [],
           isOnline: c.isOnline !== false,
@@ -1090,7 +1092,7 @@ io.on('connection', (socket) => {
           const { password, ...rest } = u;
           return {
             ...rest,
-            id: u.id || Math.random().toString(36).substr(2, 9),
+            id: u.id || Math.random().toString(36).slice(2, 11),
             passwordHash: passwordHash || hashPassword('Changeme1'),
             role: u.role === 'ADMIN' ? 'ADMIN' : 'OPERATOR',
             username: username,

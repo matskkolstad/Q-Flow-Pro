@@ -3,7 +3,7 @@ import { useAuth } from '../context/AuthContext';
 import { ChangePasswordModal } from './ChangePasswordModal';
 
 export const PasswordChangeGuard: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { user, token } = useAuth();
+  const { user, refreshUser } = useAuth();
   const [showModal, setShowModal] = useState(false);
   const [isRequired, setIsRequired] = useState(false);
 
@@ -19,20 +19,7 @@ export const PasswordChangeGuard: React.FC<{ children: React.ReactNode }> = ({ c
     setIsRequired(false);
     
     // Refresh user data from API to get updated mustChangePassword flag
-    if (token) {
-      try {
-        const res = await fetch('/api/me', {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        if (res.ok) {
-          const data = await res.json();
-          // The user state will be updated by the AuthContext
-          window.location.reload(); // Force reload to update context
-        }
-      } catch (err) {
-        console.error('Failed to refresh user data', err);
-      }
-    }
+    await refreshUser();
   };
 
   const handleClose = () => {

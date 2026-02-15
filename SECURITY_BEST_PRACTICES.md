@@ -365,13 +365,13 @@ Use this checklist before going live:
 
 ## Additional Resources
 
-- **GitHub Security Advisories**: https://github.com/matskkolstad/Q-Flow-Pro/security
+- **GitHub Security Advisories**: Check your repository's security tab for advisories
 - **OWASP Security Guidelines**: https://owasp.org/
 - **Node.js Security Best Practices**: https://nodejs.org/en/docs/guides/security/
 
 ## Support
 
 For security concerns or questions:
-- Open a GitHub issue (for non-sensitive matters)
+- Open a GitHub issue in your repository (for non-sensitive matters)
 - Contact maintainers directly for security vulnerabilities
 - Follow responsible disclosure practices

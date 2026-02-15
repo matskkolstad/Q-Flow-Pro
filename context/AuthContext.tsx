@@ -7,6 +7,7 @@ type AuthState = {
   loading: boolean;
   login: (username: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
+  refreshUser: () => Promise<void>;
 };
 
 const AuthContext = createContext<AuthState | undefined>(undefined);
@@ -72,9 +73,24 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }, [token]);
 
+  const refreshUser = useCallback(async () => {
+    if (!token) return;
+    try {
+      const res = await fetch('/api/me', {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) throw new Error('unauthorized');
+      const data = await res.json();
+      setUser(data.user);
+    } catch (err) {
+      console.error('Failed to refresh user', err);
+      // Don't logout on refresh failure, just log the error
+    }
+  }, [token]);
+
   const value = useMemo(
-    () => ({ user, token, loading, login, logout }),
-    [user, token, loading, login, logout]
+    () => ({ user, token, loading, login, logout, refreshUser }),
+    [user, token, loading, login, logout, refreshUser]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
