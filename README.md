@@ -27,6 +27,7 @@ The owner of this software makes **NO WARRANTIES** and assumes **NO LIABILITY** 
 
 ## Documentation
 - **[Installation Guide](INSTALLATION.md)** - Complete setup instructions and testing guide
+- **[OAuth/OIDC Authentication](docs/oauth-oidc-auth.md)** - Configure Google Workspace and OIDC authentication
 - **[Review Summary](REVIEW_SUMMARY.md)** - Comprehensive review results ([Norwegian version](GJENNOMGANG.md))
 - **[Security Audit](SECURITY_AUDIT.md)** - Known vulnerabilities and security considerations
 - **[CLI Documentation](docs/cli.en.md)** - Command-line user management ([Norwegian version](docs/cli.md))
@@ -155,6 +156,10 @@ Exposes port 3000. Set env vars via compose or an `.env` file referenced there.
 ### Authentication & Access Control
 - **Forced Password Change**: Default users (admin/operator) are automatically required to change their password on first login
 - **Password Policy**: Minimum 8 characters with uppercase, lowercase, and digits required
+- **OAuth/OIDC Support**: Enterprise authentication with Google Workspace and OIDC providers (see [OAuth/OIDC docs](docs/oauth-oidc-auth.md))
+  - Domain whitelisting for Google Workspace
+  - Auto-provisioning with configurable default roles
+  - Account linking by email
 - **Session Management**: Configurable TTL (default 12 hours) with automatic expiration
 - **API Key Protection**: Optional API key requirement for sensitive endpoints (configure via `API_KEYS` env var)
 - **IP Whitelisting**: Optional IP-based access control for API endpoints (configure via `ALLOWED_API_IPS` env var)
