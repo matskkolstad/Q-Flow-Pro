@@ -906,6 +906,12 @@ app.get('/api/auth/providers', (req, res) => {
 
 // Google OAuth routes
 app.get('/auth/google', (req, res, next) => {
+  const ip = req.ip || req.headers['x-forwarded-for'] || 'unknown';
+  if (isLoginBlocked(ip)) {
+    addLog(`Google OAuth blokkert for ${ip} (for mange forsøk)`, 'ALERT');
+    return res.status(429).json({ error: 'too_many_attempts' });
+  }
+  
   if (!isGoogleConfigured(state)) {
     return res.status(400).json({ error: 'Google authentication not configured' });
   }
@@ -913,6 +919,9 @@ app.get('/auth/google', (req, res, next) => {
 });
 
 app.get('/auth/google/callback', (req, res, next) => {
+  const ip = req.ip || req.headers['x-forwarded-for'] || 'unknown';
+  registerLoginAttempt(ip); // Count attempt
+  
   if (!isGoogleConfigured(state)) {
     return res.status(400).json({ error: 'Google authentication not configured' });
   }
@@ -934,7 +943,6 @@ app.get('/auth/google/callback', (req, res, next) => {
     
     // Create session token
     const token = createSession(user.id);
-    const ip = req.ip || req.headers['x-forwarded-for'] || 'unknown';
     addLog(`Google OAuth innlogging vellykket for ${user.username} (${user.role}) fra ${ip}`, 'ACTION');
     
     // Redirect to frontend with token
@@ -944,6 +952,12 @@ app.get('/auth/google/callback', (req, res, next) => {
 
 // OIDC routes
 app.get('/auth/oidc', (req, res, next) => {
+  const ip = req.ip || req.headers['x-forwarded-for'] || 'unknown';
+  if (isLoginBlocked(ip)) {
+    addLog(`OIDC OAuth blokkert for ${ip} (for mange forsøk)`, 'ALERT');
+    return res.status(429).json({ error: 'too_many_attempts' });
+  }
+  
   if (!isOIDCConfigured(state)) {
     return res.status(400).json({ error: 'OIDC authentication not configured' });
   }
@@ -951,6 +965,9 @@ app.get('/auth/oidc', (req, res, next) => {
 });
 
 app.get('/auth/oidc/callback', (req, res, next) => {
+  const ip = req.ip || req.headers['x-forwarded-for'] || 'unknown';
+  registerLoginAttempt(ip); // Count attempt
+  
   if (!isOIDCConfigured(state)) {
     return res.status(400).json({ error: 'OIDC authentication not configured' });
   }
@@ -972,7 +989,6 @@ app.get('/auth/oidc/callback', (req, res, next) => {
     
     // Create session token
     const token = createSession(user.id);
-    const ip = req.ip || req.headers['x-forwarded-for'] || 'unknown';
     addLog(`OIDC innlogging vellykket for ${user.username} (${user.role}) fra ${ip}`, 'ACTION');
     
     // Redirect to frontend with token
