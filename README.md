@@ -3,6 +3,28 @@
   <p>Queue and counter management with real-time updates, public displays, kiosk, counter screens, and admin panel.</p>
 </div>
 
+## ⚠️ Important Disclaimer
+
+**This application is entirely developed using Artificial Intelligence (AI).**
+
+The owner of this software makes **NO WARRANTIES** and assumes **NO LIABILITY** for:
+- ❌ Software defects, bugs, or errors
+- ❌ Security vulnerabilities or breaches  
+- ❌ Data loss, corruption, or integrity issues
+- ❌ Compliance with laws, regulations, or standards
+- ❌ Fitness for any particular purpose
+
+**BY USING THIS SOFTWARE, YOU ACCEPT FULL RESPONSIBILITY FOR:**
+- ✅ Testing and validating the software for your use case
+- ✅ Implementing appropriate security measures
+- ✅ Conducting security audits and vulnerability assessments
+- ✅ Ensuring compliance with applicable requirements
+- ✅ Any consequences resulting from use of this software
+
+**USE AT YOUR OWN RISK.** See [LICENSE](LICENSE) for complete terms.
+
+---
+
 ## Documentation
 - **[Installation Guide](INSTALLATION.md)** - Complete setup instructions and testing guide
 - **[Review Summary](REVIEW_SUMMARY.md)** - Comprehensive review results ([Norwegian version](GJENNOMGANG.md))
@@ -62,13 +84,15 @@ npm run dev             # Vite dev on 5173, API proxied to 3000
 ```
 - Frontend dev: http://localhost:5173
 - Backend: http://localhost:3000
-- **Default users on first run** (`db.json` defaults): admin/Admin123!, operator/Operator123!
-- ⚠️ **SECURITY WARNING**: Change default passwords immediately after first login! These credentials are publicly documented and should never be used in production.
+- **Default users on first run** (`db.json` defaults): admin/admin, operator/operator
+- ⚠️ **SECURITY**: Default users are automatically flagged to change password on first login. You will be prompted to set a secure password immediately after logging in for the first time.
 
 ## Environment Variables
 See [.env.example](.env.example). Key settings:
 - `HOST` / `PORT`: binding (default 0.0.0.0:3000)
 - `ALLOWED_ORIGINS`: comma-separated origins for CORS/WebSocket (add your domain for prod)
+- `API_KEYS`: comma-separated API keys for additional endpoint protection (optional but recommended)
+- `ALLOWED_API_IPS`: comma-separated IP addresses or CIDR blocks allowed to access API (optional)
 - `ENABLE_CSP`: set `1` when frontend is CSP-clean
 - `SESSION_TTL_HOURS`: session lifetime
 - `LOG_RETENTION_DAYS`, `BACKUP_RETENTION_DAYS`: rotation periods
@@ -127,14 +151,39 @@ Exposes port 3000. Set env vars via compose or an `.env` file referenced there.
 - Backup/log rotation is built-in; monitor disk and keep offsite copies if needed.
 
 ## Security Considerations
-- **Default Passwords**: Change admin and operator passwords immediately after installation!
+
+### Authentication & Access Control
+- **Forced Password Change**: Default users (admin/operator) are automatically required to change their password on first login
+- **Password Policy**: Minimum 8 characters with uppercase, lowercase, and digits required
+- **Session Management**: Configurable TTL (default 12 hours) with automatic expiration
+- **API Key Protection**: Optional API key requirement for sensitive endpoints (configure via `API_KEYS` env var)
+- **IP Whitelisting**: Optional IP-based access control for API endpoints (configure via `ALLOWED_API_IPS` env var)
+  - Supports individual IPs: `192.168.1.100,10.0.0.5`
+  - Supports CIDR notation: `192.168.1.0/24,10.0.0.0/8`
+
+### Network Security
 - **Reverse Proxy**: Always deploy behind a reverse proxy (Nginx, Caddy, Apache) with:
   - HTTPS/TLS termination
   - Rate limiting on `/api/login` and `/api/*` endpoints
   - Optional CSRF protection
-- **Network**: Restrict access to trusted networks or use VPN for admin access.
-- **Updates**: Regularly update dependencies to patch security vulnerabilities.
-- **Backups**: Keep secure, offsite backups of the database and configuration.
+- **CORS**: Properly configured via `ALLOWED_ORIGINS` environment variable
+- **Network Isolation**: Restrict access to trusted networks or use VPN for admin access
+
+### API Security
+To enable API key protection:
+1. Generate secure random keys: `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`
+2. Add to `.env`: `API_KEYS=your_generated_key_here`
+3. Protected endpoints will require `X-API-Key` header or `?apiKey=` query parameter
+
+Protected endpoints when API keys are configured:
+- `/api/print-ticket` - Server-side ticket printing
+- All admin backup endpoints
+
+### Best Practices
+- **Updates**: Regularly update dependencies to patch security vulnerabilities
+- **Backups**: Keep secure, offsite backups of the database and configuration
+- **Monitoring**: Review logs regularly for suspicious activity
+- **Least Privilege**: Use operator accounts for day-to-day operations; reserve admin for configuration
 
 ## User Management (GUI & CLI)
 
@@ -193,3 +242,19 @@ Guards: cannot delete or demote last admin (`at_least_one_admin_required`).
 9) **Backups**: Admin → Backup (or API); downloads SQLite snapshot.
 
 Tip: Role separation — operators can serve tickets but not manage users/settings; admins can do all operations.
+
+## License
+
+Copyright (c) 2026 Mats Kolstad. All rights reserved.
+
+This software is provided under a **Proprietary License**. See [LICENSE](LICENSE) for full terms.
+
+**Summary:**
+- ✅ You MAY view, use, and modify the software for your own purposes
+- ❌ You MAY NOT distribute, sell, or sublicense without written permission
+- ⚠️ Software is provided "AS IS" with NO WARRANTIES
+- ⚠️ Entire application is AI-generated - use at your own risk
+
+For distribution, commercial licensing, or other inquiries, contact **matskkolstad** via GitHub.
+
+**AI Disclaimer:** This application is entirely developed using Artificial Intelligence. The owner accepts no liability for errors, bugs, security issues, or any consequences of use. Users assume full responsibility for testing, security, and compliance.

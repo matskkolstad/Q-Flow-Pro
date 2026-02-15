@@ -68,11 +68,24 @@ HOST=0.0.0.0
 PORT=3000
 NODE_ENV=production
 ALLOWED_ORIGINS=http://localhost:3000,http://localhost:5173
+
+# API Security (Optional but Recommended for Production)
+# Generate API keys with: node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+API_KEYS=
+# IP Whitelist (Optional) - Supports CIDR notation
+# Example: ALLOWED_API_IPS=192.168.1.0/24,10.0.0.5
+ALLOWED_API_IPS=
+
 ENABLE_CSP=0
 SESSION_TTL_HOURS=12
 LOG_RETENTION_DAYS=14
 BACKUP_RETENTION_DAYS=30
 ```
+
+**Security Notes**:
+- `API_KEYS`: Optional comma-separated API keys for additional endpoint protection
+- `ALLOWED_API_IPS`: Optional IP whitelist for API access (supports CIDR notation)
+- Leave security options empty for development; configure for production
 
 ### 4. Build the Application
 ```bash
@@ -97,24 +110,30 @@ The server will start on `http://localhost:3000`
 Open your browser and navigate to `http://localhost:3000`
 
 ### 2. Login with Default Credentials
-⚠️ **IMPORTANT**: Change these immediately after first login!
 
-- **Admin Account**
-  - Username: `admin`
-  - Password: `Admin123!`
+**Default users** (automatically created on first run):
+- **Admin Account**: username `admin` / password `admin`
+- **Operator Account**: username `operator` / password `operator`
 
-- **Operator Account**
-  - Username: `operator`
-  - Password: `Operator123!`
+⚠️ **IMPORTANT**: You will be **automatically prompted** to change these passwords on first login. This is a security requirement and cannot be skipped.
 
-### 3. Change Default Passwords
-1. Log in as admin
-2. Navigate to Settings → General
-3. Click "Change password"
-4. Enter old password and new password
-5. Save changes
+### 3. Change Default Passwords (Automatic)
 
-Repeat for operator account.
+The system will display a password change modal immediately after logging in with a default account:
+1. Log in with default credentials
+2. A modal will appear requiring password change
+3. Enter the current (default) password
+4. Enter a new secure password:
+   - Minimum 8 characters
+   - Must include uppercase letters
+   - Must include lowercase letters
+   - Must include at least one digit
+5. Confirm the new password
+6. Click "Change Password"
+
+The password change is enforced and you cannot proceed without completing it.
+
+**Repeat for both admin and operator accounts.**
 
 ### 4. Configure Services and Counters
 1. Go to Settings → Services
@@ -286,6 +305,22 @@ ALLOWED_ORIGINS=http://localhost:3000,http://localhost:5173,https://yourdomain.c
 
 ## Production Deployment
 
+### Security Checklist
+
+Before deploying to production, complete this security checklist:
+
+- [ ] Changed all default passwords (enforced automatically on first login)
+- [ ] Configured `API_KEYS` in `.env` (generate with crypto.randomBytes)
+- [ ] Configured `ALLOWED_API_IPS` to restrict API access (if applicable)
+- [ ] Set `ALLOWED_ORIGINS` to production domain(s) only
+- [ ] Reduced `SESSION_TTL_HOURS` if needed (consider 8 hours for high-security)
+- [ ] Deployed behind HTTPS reverse proxy
+- [ ] Configured firewall to block direct access to port 3000
+- [ ] Set up automated backups
+- [ ] Configured log monitoring and retention
+
+For detailed security guidance, see [SECURITY_BEST_PRACTICES.md](SECURITY_BEST_PRACTICES.md).
+
 ### Option 1: systemd Service (Linux)
 
 See [docs/systemd.en.md](docs/systemd.en.md) for detailed instructions.
@@ -396,6 +431,34 @@ npm run user-cli -- update \
 - **Issues**: Report bugs on GitHub Issues
 - **Security**: See SECURITY_AUDIT.md for known vulnerabilities
 
-## License
+## License and Disclaimer
 
-See LICENSE file for details.
+**Copyright (c) 2026 Mats Kolstad. All rights reserved.**
+
+This software is provided under a **Proprietary License**. See [LICENSE](LICENSE) file for complete terms.
+
+### License Summary
+
+- ✅ **Allowed**: View source, use for personal/internal purposes, modify for own use
+- ❌ **Prohibited**: Distribution, selling, sublicensing without written permission
+- 📧 **Contact**: matskkolstad via GitHub for licensing inquiries
+
+### AI Development Disclaimer
+
+⚠️ **IMPORTANT**: This entire application has been developed using Artificial Intelligence (AI).
+
+**The owner makes NO WARRANTIES and accepts NO LIABILITY for:**
+- Software defects, bugs, or errors
+- Security vulnerabilities or breaches
+- Data loss or corruption
+- Compliance with laws or regulations
+- Any damages arising from use
+
+**By using this software, you agree to:**
+- Accept full responsibility for testing and validation
+- Implement appropriate security measures
+- Conduct your own security audits
+- Ensure compliance with applicable requirements
+- Assume all risks associated with use
+
+**USE AT YOUR OWN RISK.**

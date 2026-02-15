@@ -22,6 +22,19 @@ const ALLOWED_ORIGINS = (() => {
 const ENABLE_CSP = process.env.ENABLE_CSP === '1';
 const ALLOWED_WS_ORIGINS = ALLOWED_ORIGINS.map((o) => o.replace(/^http/, 'ws'));
 
+// API Security Configuration
+const API_KEYS = (() => {
+  const env = process.env.API_KEYS;
+  if (!env) return [];
+  return env.split(',').map(k => k.trim()).filter(Boolean);
+})();
+const ALLOWED_API_IPS = (() => {
+  const env = process.env.ALLOWED_API_IPS;
+  if (!env) return [];
+  return env.split(',').map(ip => ip.trim()).filter(Boolean);
+})();
+const API_KEY_REQUIRED = API_KEYS.length > 0;
+
 const app = express();
 app.set('trust proxy', 1);
 app.use(express.json({ limit: '10mb' }));
@@ -48,6 +61,15 @@ app.use(helmet({
     }
   } : false,
   crossOriginEmbedderPolicy: false,
+  hsts: {
+    maxAge: 31536000, // 1 year
+    includeSubDomains: true,
+    preload: true,
+  },
+  referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
+  noSniff: true,
+  xssFilter: true,
+  hidePoweredBy: true,
 }));
 
 io.engine.on('connection_error', (err) => {
@@ -106,6 +128,8 @@ const BACKUP_RETENTION_DAYS = Number(process.env.BACKUP_RETENTION_DAYS || 30);
 const SLOW_REQUEST_MS = 1200;
 const WAITING_ALERT_THRESHOLD = 50;
 const WAITING_ALERT_INTERVAL_MS = 5 * 60 * 1000;
+const DEFAULT_ADMIN_USERNAME = 'admin';
+const DEFAULT_OPERATOR_USERNAME = 'operator';
 let lastQueueAlertAt = 0;
 const isSha256 = (hash = '') => /^[a-f0-9]{64}$/i.test(hash);
 const hashPassword = (pw = '') => bcrypt.hashSync(pw, BCRYPT_ROUNDS);
@@ -150,6 +174,125 @@ const isLoginBlocked = (ip) => {
   return recent.length >= MAX_LOGIN_ATTEMPTS;
 };
 
+// General API rate limiting
+const apiRateLimits = new Map(); // ip -> { timestamps: [], blocked: false, blockExpiry: 0 }
+const MAX_API_REQUESTS = 100; // Max requests per window
+const API_RATE_WINDOW_MS = 60 * 1000; // 1 minute window
+const API_BLOCK_DURATION_MS = 5 * 60 * 1000; // 5 minute block
+const checkApiRateLimit = (ip) => {
+  const now = Date.now();
+  let entry = apiRateLimits.get(ip) || { timestamps: [], blocked: false, blockExpiry: 0 };
+  
+  // Check if currently blocked
+  if (entry.blocked && entry.blockExpiry > now) {
+    return { allowed: false, remaining: 0, blockExpiry: entry.blockExpiry };
+  }
+  
+  // Unblock if block period expired
+  if (entry.blocked && entry.blockExpiry <= now) {
+    entry = { timestamps: [], blocked: false, blockExpiry: 0 };
+  }
+  
+  // Clean old timestamps
+  const recent = entry.timestamps.filter((t) => now - t < API_RATE_WINDOW_MS);
+  
+  // Check if limit exceeded
+  if (recent.length >= MAX_API_REQUESTS) {
+    entry.blocked = true;
+    entry.blockExpiry = now + API_BLOCK_DURATION_MS;
+    entry.timestamps = recent;
+    apiRateLimits.set(ip, entry);
+    return { allowed: false, remaining: 0, blockExpiry: entry.blockExpiry };
+  }
+  
+  // Add current request
+  recent.push(now);
+  entry.timestamps = recent;
+  apiRateLimits.set(ip, entry);
+  
+  return { allowed: true, remaining: MAX_API_REQUESTS - recent.length };
+};
+
+// Middleware: General API rate limiting
+const apiRateLimiter = (req, res, next) => {
+  // Skip rate limiting for health endpoint
+  if (req.path === '/health') return next();
+  
+  // Apply rate limiting to API endpoints only
+  if (!req.path.startsWith('/api/')) return next();
+  
+  const ip = req.ip || req.headers['x-forwarded-for'] || 'unknown';
+  const check = checkApiRateLimit(ip);
+  
+  // Set rate limit headers
+  res.setHeader('X-RateLimit-Limit', MAX_API_REQUESTS.toString());
+  res.setHeader('X-RateLimit-Remaining', check.remaining.toString());
+  res.setHeader('X-RateLimit-Reset', new Date(Date.now() + API_RATE_WINDOW_MS).toISOString());
+  
+  if (!check.allowed) {
+    const resetTime = new Date(check.blockExpiry).toISOString();
+    res.setHeader('Retry-After', Math.ceil((check.blockExpiry - Date.now()) / 1000).toString());
+    addLog(`API rate limit exceeded for ${ip}, blocked until ${resetTime}`, 'ALERT');
+    return res.status(429).json({ 
+      error: 'rate_limit_exceeded', 
+      message: 'Too many requests. Please try again later.',
+      retryAfter: resetTime
+    });
+  }
+  
+  next();
+};
+
+// IP whitelist validation (supports CIDR notation)
+const isIPAllowed = (ip) => {
+  if (ALLOWED_API_IPS.length === 0) return true; // No whitelist = allow all
+  
+  // Simple IP matching (exact match or CIDR prefix)
+  for (const allowed of ALLOWED_API_IPS) {
+    if (allowed === ip) return true;
+    
+    // Basic CIDR support (e.g., 192.168.1.0/24)
+    if (allowed.includes('/')) {
+      const [network, bits] = allowed.split('/');
+      const mask = -1 << (32 - parseInt(bits));
+      const networkInt = ipToInt(network);
+      const ipInt = ipToInt(ip);
+      if ((ipInt & mask) === (networkInt & mask)) return true;
+    }
+  }
+  return false;
+};
+
+const ipToInt = (ip) => {
+  if (!ip || typeof ip !== 'string') return 0;
+  const parts = ip.split('.');
+  if (parts.length !== 4) return 0;
+  return parts.reduce((acc, octet) => (acc << 8) + parseInt(octet, 10), 0) >>> 0;
+};
+
+// Middleware: Validate API key
+const requireApiKey = (req, res, next) => {
+  if (!API_KEY_REQUIRED) return next(); // No API keys configured = skip validation
+  
+  const apiKey = req.headers['x-api-key'] || req.query.apiKey;
+  if (!apiKey || !API_KEYS.includes(apiKey)) {
+    const ip = req.ip || req.headers['x-forwarded-for'] || 'unknown';
+    addLog(`API access denied: invalid or missing API key from ${ip}`, 'ALERT');
+    return res.status(401).json({ error: 'invalid_api_key' });
+  }
+  next();
+};
+
+// Middleware: Validate IP whitelist
+const requireAllowedIP = (req, res, next) => {
+  const ip = req.ip || req.headers['x-forwarded-for'] || 'unknown';
+  if (!isIPAllowed(ip)) {
+    addLog(`API access denied: IP ${ip} not in whitelist`, 'ALERT');
+    return res.status(403).json({ error: 'ip_not_allowed' });
+  }
+  next();
+};
+
 // Load state from SQLite (migrates legacy db.json if present)
 let state = loadStateFromStore(DEFAULT_STATE);
 state = { ...DEFAULT_STATE, ...state };
@@ -185,12 +328,19 @@ Object.entries(state.sessions).forEach(([token, sess]) => {
 state.users = (state.users || []).map((u, idx) => {
   const username = u.username || `user${idx + 1}`;
   let passwordHash = u.passwordHash;
+  let mustChangePassword = u.mustChangePassword !== undefined ? u.mustChangePassword : false;
+  
+  // Mark default users (admin/operator with default passwords) as requiring password change
   if (!passwordHash || passwordHash.length === 0) {
     passwordHash = hashPassword(u.pinCode || username);
+    // If password was auto-generated from username, require change on first login
+    if ((username === DEFAULT_ADMIN_USERNAME || username === DEFAULT_OPERATOR_USERNAME) && !u.pinCode) {
+      mustChangePassword = true;
+    }
   } else if (!passwordHash.startsWith('$2') && isSha256(passwordHash)) {
     // Keep sha256 for now; will upgrade on successful login
   }
-  return { ...u, username, passwordHash };
+  return { ...u, username, passwordHash, mustChangePassword };
 });
 const getSession = (token) => {
   if (!token || !state.sessions) return null;
@@ -211,6 +361,28 @@ const createSession = (userId) => {
   state.sessions[token] = { userId, createdAt: Date.now(), expiresAt: Date.now() + SESSION_TTL_MS };
   saveState();
   return token;
+};
+
+// Forward declaration of addLog (full implementation later after routes)
+let addLog = (message, type = 'INFO') => {
+  const log = {
+    id: Math.random().toString(36).slice(2, 11),
+    timestamp: Date.now(),
+    message,
+    type
+  };
+  state.logs = [log, ...state.logs].slice(0, LOG_LIMIT);
+  try {
+    console.log(JSON.stringify({ level: type, msg: message, ts: log.timestamp }));
+    fs.mkdirSync(LOG_DIR, { recursive: true });
+    const day = new Date(log.timestamp).toISOString().slice(0, 10);
+    fs.appendFileSync(join(LOG_DIR, `app-${day}.log`), JSON.stringify({ level: type, msg: message, ts: log.timestamp }) + '\n');
+    // io.emit will be available when this is called (after server setup)
+    if (io) io.emit('log-event', log);
+  } catch (e) {
+    // fallback noop
+  }
+  return log;
 };
 
 const requireRole = (socket, roles = []) => {
@@ -320,8 +492,11 @@ setInterval(async () => {
   }
 })();
 
+// Apply API rate limiting before routes
+app.use(apiRateLimiter);
+
 // --- REST: server-side printing to avoid browser CORS/mixed-content ---
-app.post('/api/print-ticket', async (req, res) => {
+app.post('/api/print-ticket', requireAllowedIP, requireApiKey, async (req, res) => {
   const { ipAddress, port = 9100, ticket, serviceName, waitTime, language: langInput, brandText, brandLogoUrl } = req.body || {};
   if (!ipAddress || !ticket?.number) {
     return res.status(400).json({ ok: false, error: 'Missing printer or ticket' });
@@ -567,7 +742,16 @@ app.post('/api/login', (req, res) => {
 
   const token = createSession(user.id);
   addLog(`Innlogging vellykket for ${username} (${user.role}) fra ${ip}`, 'ACTION');
-  return res.json({ token, user: { id: user.id, name: user.name, username: user.username, role: user.role } });
+  return res.json({ 
+    token, 
+    user: { 
+      id: user.id, 
+      name: user.name, 
+      username: user.username, 
+      role: user.role,
+      mustChangePassword: user.mustChangePassword || false
+    } 
+  });
 });
 
 app.post('/api/logout', (req, res) => {
@@ -589,7 +773,15 @@ app.get('/api/me', (req, res) => {
   const session = getSession(token);
   if (!session?.user) return res.status(401).json({ error: 'unauthorized' });
   const { user } = session;
-  return res.json({ user: { id: user.id, name: user.name, username: user.username, role: user.role } });
+  return res.json({ 
+    user: { 
+      id: user.id, 
+      name: user.name, 
+      username: user.username, 
+      role: user.role,
+      mustChangePassword: user.mustChangePassword || false
+    } 
+  });
 });
 
 app.post('/api/user/password', (req, res) => {
@@ -608,32 +800,12 @@ app.post('/api/user/password', (req, res) => {
     addLog(`Passordendring feilet for ${user.username}: ugyldig gammelt passord`, 'ALERT');
     return res.status(401).json({ error: 'invalid_old_password' });
   }
-  state.users[userIdx] = { ...user, passwordHash: hashPassword(newPassword) };
+  // Clear mustChangePassword flag when user changes password
+  state.users[userIdx] = { ...user, passwordHash: hashPassword(newPassword), mustChangePassword: false };
   saveState();
   addLog(`Passord endret for ${user.username}`, 'ACTION');
   return res.json({ ok: true });
 });
-
-// Helper: Add log
-const addLog = (message, type = 'INFO') => {
-  const log = {
-    id: Math.random().toString(36).substr(2, 9),
-    timestamp: Date.now(),
-    message,
-    type
-  };
-  state.logs = [log, ...state.logs].slice(0, LOG_LIMIT);
-  try {
-    console.log(JSON.stringify({ level: type, msg: message, ts: log.timestamp }));
-    fs.mkdirSync(LOG_DIR, { recursive: true });
-    const day = new Date(log.timestamp).toISOString().slice(0, 10);
-    fs.appendFileSync(join(LOG_DIR, `app-${day}.log`), JSON.stringify({ level: type, msg: message, ts: log.timestamp }) + '\n');
-    io.emit('log-event', log);
-  } catch (e) {
-    // fallback noop
-  }
-  return log;
-};
 
 const actorLabel = (socket) => {
   const role = socket?.data?.authRole || 'PUBLIC';
@@ -767,7 +939,7 @@ io.on('connection', (socket) => {
     const nextNum = (maxNum + 1).toString().padStart(3, '0');
 
     const newTicket = {
-      id: Math.random().toString(36).substr(2, 9),
+      id: Math.random().toString(36).slice(2, 11),
       number: `${service.prefix}${nextNum}`,
       serviceId,
       status: 'WAITING',
@@ -878,7 +1050,7 @@ io.on('connection', (socket) => {
       const changes = [];
       if (Array.isArray(next.services)) {
         state.services = next.services.map((s) => ({
-          id: s.id || Math.random().toString(36).substr(2, 9),
+          id: s.id || Math.random().toString(36).slice(2, 11),
           name: cleanText(s.name, 80) || 'Tjeneste',
           prefix: (cleanText(s.prefix, 2).toUpperCase() || 'X'),
           color: s.color || 'bg-gray-500',
@@ -890,7 +1062,7 @@ io.on('connection', (socket) => {
       }
       if (Array.isArray(next.counters)) {
         state.counters = next.counters.map((c) => ({
-          id: c.id || Math.random().toString(36).substr(2, 9),
+          id: c.id || Math.random().toString(36).slice(2, 11),
           name: cleanText(c.name, 80) || 'Skranke',
           activeServiceIds: Array.isArray(c.activeServiceIds) ? c.activeServiceIds.filter((id) => typeof id === 'string' && id.length > 0) : [],
           isOnline: c.isOnline !== false,
@@ -920,7 +1092,7 @@ io.on('connection', (socket) => {
           const { password, ...rest } = u;
           return {
             ...rest,
-            id: u.id || Math.random().toString(36).substr(2, 9),
+            id: u.id || Math.random().toString(36).slice(2, 11),
             passwordHash: passwordHash || hashPassword('Changeme1'),
             role: u.role === 'ADMIN' ? 'ADMIN' : 'OPERATOR',
             username: username,
@@ -1105,7 +1277,7 @@ io.on('connection', (socket) => {
   });
 
 // Admin-triggered backup (requires Bearer token for ADMIN)
-app.post('/api/admin/backup', (req, res) => {
+app.post('/api/admin/backup', requireAllowedIP, (req, res) => {
   const auth = req.headers.authorization || '';
   const token = auth.startsWith('Bearer ') ? auth.slice(7) : null;
   const session = getSession(token);
@@ -1120,7 +1292,7 @@ app.post('/api/admin/backup', (req, res) => {
   }
 });
 
-app.get('/api/admin/backups', (req, res) => {
+app.get('/api/admin/backups', requireAllowedIP, (req, res) => {
   const auth = req.headers.authorization || '';
   const token = auth.startsWith('Bearer ') ? auth.slice(7) : null;
   const session = getSession(token);
@@ -1135,7 +1307,7 @@ app.get('/api/admin/backups', (req, res) => {
   }
 });
 
-app.get('/api/admin/backup/:file', (req, res) => {
+app.get('/api/admin/backup/:file', requireAllowedIP, (req, res) => {
   const auth = req.headers.authorization || '';
   const token = auth.startsWith('Bearer ') ? auth.slice(7) : null;
   const session = getSession(token);

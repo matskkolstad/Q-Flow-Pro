@@ -3,6 +3,13 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
+  "license": "SEE LICENSE IN LICENSE",
+  "author": "Mats Kolstad",
+  "description": "Queue and counter management system with real-time updates. AI-generated application - use at your own risk.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/matskkolstad/Q-Flow-Pro"
+  },
   "bin": {
     "qflow-cli": "scripts/user-cli.js"
   },
