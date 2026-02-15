@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode, useRef } from 'react';
 import { io, Socket } from 'socket.io-client';
-import { Ticket, Service, Counter, LogEntry, QueueContextType, TicketStatus, User, Printer, KioskConfig, SoundSettings, CounterDisplay, BrandingConfig } from '../types';
+import { Ticket, Service, Counter, LogEntry, QueueContextType, TicketStatus, User, Printer, KioskConfig, SoundSettings, CounterDisplay, BrandingConfig, AuthProviderConfig } from '../types';
 import { audioService } from '../services/audioService';
 import { useI18n } from './I18nContext';
 
@@ -54,6 +54,24 @@ export const QueueProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         callChime: true,
         callVoice: true
     });
+    const [authProviders, setAuthProvidersState] = useState<AuthProviderConfig>({
+        google: {
+            enabled: false,
+            clientId: '',
+            clientSecret: '',
+            allowedDomains: [],
+            autoProvision: false,
+            defaultRole: 'OPERATOR'
+        },
+        oidc: {
+            enabled: false,
+            issuerUrl: '',
+            clientId: '',
+            clientSecret: '',
+            autoProvision: false,
+            defaultRole: 'OPERATOR'
+        }
+    });
     const soundSettingsRef = useRef<SoundSettings>(soundSettings);
     const languageRef = useRef<'en' | 'no'>(language);
     const [isConnected, setIsConnected] = useState(socket.connected);
@@ -89,6 +107,24 @@ export const QueueProvider: React.FC<{ children: ReactNode }> = ({ children }) =
             callChime: true,
             callVoice: true
         };
+        setAuthProvidersState(state.authProviders || {
+            google: {
+                enabled: false,
+                clientId: '',
+                clientSecret: '',
+                allowedDomains: [],
+                autoProvision: false,
+                defaultRole: 'OPERATOR'
+            },
+            oidc: {
+                enabled: false,
+                issuerUrl: '',
+                clientId: '',
+                clientSecret: '',
+                autoProvision: false,
+                defaultRole: 'OPERATOR'
+            }
+        });
     };
 
     useEffect(() => {
@@ -413,6 +449,17 @@ export const QueueProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       syncSettings({ soundSettings: updates });
   };
 
+  const setAuthProviders = (updates: Partial<AuthProviderConfig>) => {
+      const next = {
+          ...authProviders,
+          ...updates,
+          google: updates.google ? { ...authProviders.google, ...updates.google } : authProviders.google,
+          oidc: updates.oidc ? { ...authProviders.oidc, ...updates.oidc } : authProviders.oidc
+      };
+      setAuthProvidersState(next); // Optimistic
+      syncSettings({ authProviders: updates });
+  };
+
   const setSystemClosed = (closed: boolean) => {
       setIsClosed(closed);
       syncSettings({ isClosed: closed });
@@ -481,10 +528,12 @@ export const QueueProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     soundSettings,
     branding,
     kioskExitPin,
+    authProviders,
     setPublicMessage: setPublicMessageWrapper,
     setSoundSettings,
     setBranding,
     setKioskExitPin,
+    setAuthProviders,
         setSystemClosed,
     reportError,
       addTicket, updateTicketStatus, callNextTicket, callSpecificTicket, deleteTicket,
