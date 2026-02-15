@@ -56,6 +56,7 @@ const AdminDashboard: React.FC = () => {
         const [pwdNew, setPwdNew] = useState('');
         const [pwdStatus, setPwdStatus] = useState<'idle' | 'saving' | 'success' | 'error'>('idle');
         const [userDrafts, setUserDrafts] = useState<Record<string, { name: string; username: string; role: 'ADMIN' | 'OPERATOR'; password?: string }>>({});
+        const [serviceDrafts, setServiceDrafts] = useState<Record<string, { etaText?: string }>>({});
     const [backupStatus, setBackupStatus] = useState<'idle' | 'working' | 'success' | 'error'>('idle');
     const [backupMessage, setBackupMessage] = useState<string>('');
     const [backups, setBackups] = useState<{ file: string; mtime: number }[]>([]);
@@ -339,9 +340,56 @@ const AdminDashboard: React.FC = () => {
         fetchBackups();
     }, [token, isAdmin, view, settingsTab]);
 
+    useEffect(() => {
+        // Clear drafts when services array updates (e.g., after server echo)
+        setServiceDrafts({});
+    }, [services]);
+
     const adminCount = useMemo(() => users.filter(u => u.role === 'ADMIN').length, [users]);
 
     const getUserDraft = (id: string) => userDrafts[id] || { name: users.find(u => u.id === id)?.name || '', username: users.find(u => u.id === id)?.username || '', role: (users.find(u => u.id === id)?.role || 'OPERATOR') as 'ADMIN' | 'OPERATOR', password: '' };
+
+    const getServiceDraftEtaValue = (id: string, fallback: number) => {
+        const draft = serviceDrafts[id];
+        if (draft && draft.etaText !== undefined) return draft.etaText;
+        return String(fallback);
+    };
+
+    const setServiceEtaDraft = (id: string, value: string) => {
+        setServiceDrafts(prev => ({ ...prev, [id]: { etaText: value } }));
+        const svc = services.find(s => s.id === id);
+        const num = Number(value);
+        if (svc && Number.isFinite(num) && num > 0 && num !== svc.estimatedTimePerPersonMinutes) {
+            updateService(id, { estimatedTimePerPersonMinutes: num });
+        }
+    };
+
+    const saveServiceEta = (id: string) => {
+        const svc = services.find(s => s.id === id);
+        if (!svc) return;
+        const draft = serviceDrafts[id];
+        const raw = draft?.etaText;
+        const eta = raw !== undefined ? Number(raw) : undefined;
+
+        if (!Number.isFinite(eta) || eta <= 0) {
+            setServiceDrafts(prev => {
+                const next = { ...prev };
+                delete next[id];
+                return next;
+            });
+            return;
+        }
+
+        if (eta !== svc.estimatedTimePerPersonMinutes) {
+            updateService(id, { estimatedTimePerPersonMinutes: eta });
+        }
+
+        setServiceDrafts(prev => {
+            const next = { ...prev };
+            delete next[id];
+            return next;
+        });
+    };
 
     const handleUserDraftChange = (id: string, field: 'name' | 'username' | 'role' | 'password', value: string) => {
         const val = field === 'role' ? (value as 'ADMIN' | 'OPERATOR') : value;
@@ -884,7 +932,15 @@ const AdminDashboard: React.FC = () => {
                                         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
                                             <div>
                                                 <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1">{t('admin.services.eta')}</label>
-                                                <input type="number" min={1} defaultValue={s.estimatedTimePerPersonMinutes} onBlur={e => updateService(s.id, { estimatedTimePerPersonMinutes: Number(e.target.value) || s.estimatedTimePerPersonMinutes })} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+                                                <input
+                                                    type="number"
+                                                    min={1}
+                                                    value={getServiceDraftEtaValue(s.id, s.estimatedTimePerPersonMinutes || 1)}
+                                                    onChange={e => setServiceEtaDraft(s.id, e.target.value)}
+                                                    onBlur={() => saveServiceEta(s.id)}
+                                                    onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); saveServiceEta(s.id); } }}
+                                                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
+                                                />
                                             </div>
                                             <div>
                                                 <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1">{t('admin.services.priority')}</label>

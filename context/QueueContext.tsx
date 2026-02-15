@@ -468,12 +468,11 @@ export const QueueProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   const getWaitTime = (serviceId: string) => {
     const service = services.find(s => s.id === serviceId);
     if (!service) return 0;
-    
-    const waitingCount = tickets.filter(t => t.serviceId === serviceId && t.status === TicketStatus.WAITING).length;
-    const activeCountersForService = counters.filter(c => c.isOnline && c.activeServiceIds.includes(serviceId)).length;
-    
-    if (activeCountersForService === 0) return waitingCount * service.estimatedTimePerPersonMinutes;
-    return Math.ceil((waitingCount * service.estimatedTimePerPersonMinutes) / activeCountersForService);
+
+        const waitingCount = tickets.filter(t => t.serviceId === serviceId && t.status === TicketStatus.WAITING).length;
+        const perPerson = service.estimatedTimePerPersonMinutes || 1;
+        if (waitingCount === 0) return 0;
+        return waitingCount * perPerson;
   };
 
   return (
