@@ -325,23 +325,38 @@ Object.entries(state.sessions).forEach(([token, sess]) => {
 });
 
 // Ensure users have username and passwordHash (rehash legacy sha256 with bcrypt on startup)
+let forcedFlagChange = false;
 state.users = (state.users || []).map((u, idx) => {
   const username = u.username || `user${idx + 1}`;
   let passwordHash = u.passwordHash;
-  let mustChangePassword = u.mustChangePassword !== undefined ? u.mustChangePassword : false;
-  
-  // Mark default users (admin/operator with default passwords) as requiring password change
+  const isDefaultUser = (username === DEFAULT_ADMIN_USERNAME || username === DEFAULT_OPERATOR_USERNAME);
+
   if (!passwordHash || passwordHash.length === 0) {
     passwordHash = hashPassword(u.pinCode || username);
-    // If password was auto-generated from username, require change on first login
-    if ((username === DEFAULT_ADMIN_USERNAME || username === DEFAULT_OPERATOR_USERNAME) && !u.pinCode) {
-      mustChangePassword = true;
-    }
   } else if (!passwordHash.startsWith('$2') && isSha256(passwordHash)) {
     // Keep sha256 for now; will upgrade on successful login
   }
+
+  const defaults = [u.pinCode, username].filter(Boolean);
+  const usingDefaultPassword = defaults.some((pw) => verifyPassword(pw, passwordHash));
+
+  let mustChangePassword = u.mustChangePassword !== undefined ? u.mustChangePassword : false;
+  // Default users must change password only while they still use the default credential
+  if (isDefaultUser && usingDefaultPassword) {
+    mustChangePassword = true;
+  }
+
+  if (mustChangePassword !== (u.mustChangePassword || false)) {
+    forcedFlagChange = true;
+  }
+
   return { ...u, username, passwordHash, mustChangePassword };
 });
+
+// Persist updated flags for default users
+if (forcedFlagChange) {
+  saveState();
+}
 const getSession = (token) => {
   if (!token || !state.sessions) return null;
   const session = state.sessions[token];
@@ -742,6 +757,9 @@ app.post('/api/login', (req, res) => {
 
   const token = createSession(user.id);
   addLog(`Innlogging vellykket for ${username} (${user.role}) fra ${ip}`, 'ACTION');
+  const isDefaultUser = (user.username === DEFAULT_ADMIN_USERNAME || user.username === DEFAULT_OPERATOR_USERNAME);
+  const usingDefaultPassword = verifyPassword(user.username, user.passwordHash) || (user.pinCode && verifyPassword(user.pinCode, user.passwordHash));
+  const mustChangePassword = !!(user.mustChangePassword || (isDefaultUser && usingDefaultPassword));
   return res.json({ 
     token, 
     user: { 
@@ -749,7 +767,7 @@ app.post('/api/login', (req, res) => {
       name: user.name, 
       username: user.username, 
       role: user.role,
-      mustChangePassword: user.mustChangePassword || false
+      mustChangePassword
     } 
   });
 });
@@ -773,13 +791,16 @@ app.get('/api/me', (req, res) => {
   const session = getSession(token);
   if (!session?.user) return res.status(401).json({ error: 'unauthorized' });
   const { user } = session;
+  const isDefaultUser = (user.username === DEFAULT_ADMIN_USERNAME || user.username === DEFAULT_OPERATOR_USERNAME);
+  const usingDefaultPassword = verifyPassword(user.username, user.passwordHash) || (user.pinCode && verifyPassword(user.pinCode, user.passwordHash));
+  const mustChangePassword = !!(user.mustChangePassword || (isDefaultUser && usingDefaultPassword));
   return res.json({ 
     user: { 
       id: user.id, 
       name: user.name, 
       username: user.username, 
       role: user.role,
-      mustChangePassword: user.mustChangePassword || false
+      mustChangePassword
     } 
   });
 });
