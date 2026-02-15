@@ -76,8 +76,17 @@ app.use(helmet({
 }));
 
 // Session configuration for OAuth
+// Generate persistent session secret (should be set in production via SESSION_SECRET env var)
+const SESSION_SECRET = process.env.SESSION_SECRET || (() => {
+  const generated = crypto.randomBytes(32).toString('hex');
+  console.warn('⚠️  WARNING: SESSION_SECRET not set in environment. Using generated secret.');
+  console.warn('⚠️  All sessions will be invalidated on server restart.');
+  console.warn('⚠️  Set SESSION_SECRET in .env for production use.');
+  return generated;
+})();
+
 app.use(session({
-  secret: process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex'),
+  secret: SESSION_SECRET,
   resave: false,
   saveUninitialized: false,
   cookie: {
@@ -439,9 +448,6 @@ const createSession = (userId) => {
   return token;
 };
 
-// Initialize Passport strategies after createSession is defined
-initializePassport(state, createSession);
-
 // Forward declaration of addLog (full implementation later after routes)
 let addLog = (message, type = 'INFO') => {
   const log = {
@@ -463,6 +469,9 @@ let addLog = (message, type = 'INFO') => {
   }
   return log;
 };
+
+// Initialize Passport strategies after createSession and addLog are defined
+initializePassport(state, createSession, addLog);
 
 const requireRole = (socket, roles = []) => {
   if (socket.data?.token) {
@@ -1340,7 +1349,7 @@ io.on('connection', (socket) => {
           };
         }
         // Reinitialize passport with new configuration
-        initializePassport(state, createSession);
+        initializePassport(state, createSession, addLog);
         changes.push('auth-providers');
       }
 
