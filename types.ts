@@ -22,6 +22,7 @@ export interface User {
   username: string;
   passwordHash?: string; // stored hashed
   pinCode?: string; // legacy
+  mustChangePassword?: boolean; // Force password change on next login
 }
 
 export interface Ticket {
