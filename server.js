@@ -22,6 +22,19 @@ const ALLOWED_ORIGINS = (() => {
 const ENABLE_CSP = process.env.ENABLE_CSP === '1';
 const ALLOWED_WS_ORIGINS = ALLOWED_ORIGINS.map((o) => o.replace(/^http/, 'ws'));
 
+// API Security Configuration
+const API_KEYS = (() => {
+  const env = process.env.API_KEYS;
+  if (!env) return [];
+  return env.split(',').map(k => k.trim()).filter(Boolean);
+})();
+const ALLOWED_API_IPS = (() => {
+  const env = process.env.ALLOWED_API_IPS;
+  if (!env) return [];
+  return env.split(',').map(ip => ip.trim()).filter(Boolean);
+})();
+const API_KEY_REQUIRED = API_KEYS.length > 0;
+
 const app = express();
 app.set('trust proxy', 1);
 app.use(express.json({ limit: '10mb' }));
@@ -150,6 +163,56 @@ const isLoginBlocked = (ip) => {
   return recent.length >= MAX_LOGIN_ATTEMPTS;
 };
 
+// IP whitelist validation (supports CIDR notation)
+const isIPAllowed = (ip) => {
+  if (ALLOWED_API_IPS.length === 0) return true; // No whitelist = allow all
+  
+  // Simple IP matching (exact match or CIDR prefix)
+  for (const allowed of ALLOWED_API_IPS) {
+    if (allowed === ip) return true;
+    
+    // Basic CIDR support (e.g., 192.168.1.0/24)
+    if (allowed.includes('/')) {
+      const [network, bits] = allowed.split('/');
+      const mask = -1 << (32 - parseInt(bits));
+      const networkInt = ipToInt(network);
+      const ipInt = ipToInt(ip);
+      if ((ipInt & mask) === (networkInt & mask)) return true;
+    }
+  }
+  return false;
+};
+
+const ipToInt = (ip) => {
+  if (!ip || typeof ip !== 'string') return 0;
+  const parts = ip.split('.');
+  if (parts.length !== 4) return 0;
+  return parts.reduce((acc, octet) => (acc << 8) + parseInt(octet, 10), 0) >>> 0;
+};
+
+// Middleware: Validate API key
+const requireApiKey = (req, res, next) => {
+  if (!API_KEY_REQUIRED) return next(); // No API keys configured = skip validation
+  
+  const apiKey = req.headers['x-api-key'] || req.query.apiKey;
+  if (!apiKey || !API_KEYS.includes(apiKey)) {
+    const ip = req.ip || req.headers['x-forwarded-for'] || 'unknown';
+    addLog(`API access denied: invalid or missing API key from ${ip}`, 'ALERT');
+    return res.status(401).json({ error: 'invalid_api_key' });
+  }
+  next();
+};
+
+// Middleware: Validate IP whitelist
+const requireAllowedIP = (req, res, next) => {
+  const ip = req.ip || req.headers['x-forwarded-for'] || 'unknown';
+  if (!isIPAllowed(ip)) {
+    addLog(`API access denied: IP ${ip} not in whitelist`, 'ALERT');
+    return res.status(403).json({ error: 'ip_not_allowed' });
+  }
+  next();
+};
+
 // Load state from SQLite (migrates legacy db.json if present)
 let state = loadStateFromStore(DEFAULT_STATE);
 state = { ...DEFAULT_STATE, ...state };
@@ -185,12 +248,19 @@ Object.entries(state.sessions).forEach(([token, sess]) => {
 state.users = (state.users || []).map((u, idx) => {
   const username = u.username || `user${idx + 1}`;
   let passwordHash = u.passwordHash;
+  let mustChangePassword = u.mustChangePassword !== undefined ? u.mustChangePassword : false;
+  
+  // Mark default users (admin/operator with default passwords) as requiring password change
   if (!passwordHash || passwordHash.length === 0) {
     passwordHash = hashPassword(u.pinCode || username);
+    // If password was auto-generated from username, require change on first login
+    if ((username === 'admin' || username === 'operator') && !u.pinCode) {
+      mustChangePassword = true;
+    }
   } else if (!passwordHash.startsWith('$2') && isSha256(passwordHash)) {
     // Keep sha256 for now; will upgrade on successful login
   }
-  return { ...u, username, passwordHash };
+  return { ...u, username, passwordHash, mustChangePassword };
 });
 const getSession = (token) => {
   if (!token || !state.sessions) return null;
@@ -211,6 +281,28 @@ const createSession = (userId) => {
   state.sessions[token] = { userId, createdAt: Date.now(), expiresAt: Date.now() + SESSION_TTL_MS };
   saveState();
   return token;
+};
+
+// Forward declaration of addLog (full implementation later after routes)
+let addLog = (message, type = 'INFO') => {
+  const log = {
+    id: Math.random().toString(36).substr(2, 9),
+    timestamp: Date.now(),
+    message,
+    type
+  };
+  state.logs = [log, ...state.logs].slice(0, LOG_LIMIT);
+  try {
+    console.log(JSON.stringify({ level: type, msg: message, ts: log.timestamp }));
+    fs.mkdirSync(LOG_DIR, { recursive: true });
+    const day = new Date(log.timestamp).toISOString().slice(0, 10);
+    fs.appendFileSync(join(LOG_DIR, `app-${day}.log`), JSON.stringify({ level: type, msg: message, ts: log.timestamp }) + '\n');
+    // io.emit will be available when this is called (after server setup)
+    if (io) io.emit('log-event', log);
+  } catch (e) {
+    // fallback noop
+  }
+  return log;
 };
 
 const requireRole = (socket, roles = []) => {
@@ -321,7 +413,7 @@ setInterval(async () => {
 })();
 
 // --- REST: server-side printing to avoid browser CORS/mixed-content ---
-app.post('/api/print-ticket', async (req, res) => {
+app.post('/api/print-ticket', requireAllowedIP, requireApiKey, async (req, res) => {
   const { ipAddress, port = 9100, ticket, serviceName, waitTime, language: langInput, brandText, brandLogoUrl } = req.body || {};
   if (!ipAddress || !ticket?.number) {
     return res.status(400).json({ ok: false, error: 'Missing printer or ticket' });
@@ -567,7 +659,16 @@ app.post('/api/login', (req, res) => {
 
   const token = createSession(user.id);
   addLog(`Innlogging vellykket for ${username} (${user.role}) fra ${ip}`, 'ACTION');
-  return res.json({ token, user: { id: user.id, name: user.name, username: user.username, role: user.role } });
+  return res.json({ 
+    token, 
+    user: { 
+      id: user.id, 
+      name: user.name, 
+      username: user.username, 
+      role: user.role,
+      mustChangePassword: user.mustChangePassword || false
+    } 
+  });
 });
 
 app.post('/api/logout', (req, res) => {
@@ -589,7 +690,15 @@ app.get('/api/me', (req, res) => {
   const session = getSession(token);
   if (!session?.user) return res.status(401).json({ error: 'unauthorized' });
   const { user } = session;
-  return res.json({ user: { id: user.id, name: user.name, username: user.username, role: user.role } });
+  return res.json({ 
+    user: { 
+      id: user.id, 
+      name: user.name, 
+      username: user.username, 
+      role: user.role,
+      mustChangePassword: user.mustChangePassword || false
+    } 
+  });
 });
 
 app.post('/api/user/password', (req, res) => {
@@ -608,32 +717,12 @@ app.post('/api/user/password', (req, res) => {
     addLog(`Passordendring feilet for ${user.username}: ugyldig gammelt passord`, 'ALERT');
     return res.status(401).json({ error: 'invalid_old_password' });
   }
-  state.users[userIdx] = { ...user, passwordHash: hashPassword(newPassword) };
+  // Clear mustChangePassword flag when user changes password
+  state.users[userIdx] = { ...user, passwordHash: hashPassword(newPassword), mustChangePassword: false };
   saveState();
   addLog(`Passord endret for ${user.username}`, 'ACTION');
   return res.json({ ok: true });
 });
-
-// Helper: Add log
-const addLog = (message, type = 'INFO') => {
-  const log = {
-    id: Math.random().toString(36).substr(2, 9),
-    timestamp: Date.now(),
-    message,
-    type
-  };
-  state.logs = [log, ...state.logs].slice(0, LOG_LIMIT);
-  try {
-    console.log(JSON.stringify({ level: type, msg: message, ts: log.timestamp }));
-    fs.mkdirSync(LOG_DIR, { recursive: true });
-    const day = new Date(log.timestamp).toISOString().slice(0, 10);
-    fs.appendFileSync(join(LOG_DIR, `app-${day}.log`), JSON.stringify({ level: type, msg: message, ts: log.timestamp }) + '\n');
-    io.emit('log-event', log);
-  } catch (e) {
-    // fallback noop
-  }
-  return log;
-};
 
 const actorLabel = (socket) => {
   const role = socket?.data?.authRole || 'PUBLIC';
@@ -1105,7 +1194,7 @@ io.on('connection', (socket) => {
   });
 
 // Admin-triggered backup (requires Bearer token for ADMIN)
-app.post('/api/admin/backup', (req, res) => {
+app.post('/api/admin/backup', requireAllowedIP, (req, res) => {
   const auth = req.headers.authorization || '';
   const token = auth.startsWith('Bearer ') ? auth.slice(7) : null;
   const session = getSession(token);
@@ -1120,7 +1209,7 @@ app.post('/api/admin/backup', (req, res) => {
   }
 });
 
-app.get('/api/admin/backups', (req, res) => {
+app.get('/api/admin/backups', requireAllowedIP, (req, res) => {
   const auth = req.headers.authorization || '';
   const token = auth.startsWith('Bearer ') ? auth.slice(7) : null;
   const session = getSession(token);
@@ -1135,7 +1224,7 @@ app.get('/api/admin/backups', (req, res) => {
   }
 });
 
-app.get('/api/admin/backup/:file', (req, res) => {
+app.get('/api/admin/backup/:file', requireAllowedIP, (req, res) => {
   const auth = req.headers.authorization || '';
   const token = auth.startsWith('Bearer ') ? auth.slice(7) : null;
   const session = getSession(token);
