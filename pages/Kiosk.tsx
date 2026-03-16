@@ -5,11 +5,10 @@ import { Printer, Clock, Info, X } from 'lucide-react';
 import { Logo } from '../components/Logo';
 import { useNavigate } from 'react-router-dom';
 import { audioService } from '../services/audioService';
-import { printTicket } from '../services/printerService';
 import { useI18n } from '../context/I18nContext';
 
 const Kiosk: React.FC = () => {
-  const { services, addTicket, getWaitTime, registerKiosk, kiosks, printers, addLog, soundSettings, branding, kioskExitPin, isClosed, publicMessage } = useQueue();
+  const { services, addTicket, getWaitTime, registerKiosk, kiosks, printers, soundSettings, branding, kioskExitPin, isClosed, publicMessage } = useQueue();
   const [activeTicket, setActiveTicket] = useState<Ticket | null>(null);
   const [isPrinting, setIsPrinting] = useState(false);
   const { t, language } = useI18n();
@@ -47,35 +46,16 @@ const Kiosk: React.FC = () => {
     setIsPrinting(true);
     setPrintingStatus(t('kiosk.printingTicket'));
 
-    const service = services.find(s => s.id === serviceId);
-    
     // Simulate printing delay visually
     await new Promise(resolve => setTimeout(resolve, 1500));
     
     // Create ticket in system and wait for assigned number
-    const ticket = await addTicket(serviceId);
+    const ticket = await addTicket(serviceId, kioskId, language);
     
-    // Physical Printing Logic
+    // Serveren forsøker fysisk utskrift når kioskId er sendt med add-ticket.
     const myConfig = kiosks.find(k => k.id === kioskId);
     const assignedPrinter = printers.find(p => p.id === myConfig?.assignedPrinterId);
-
-    if (assignedPrinter && assignedPrinter.ipAddress) {
-      addLog(`Forsøker å skrive ut til ${assignedPrinter.ipAddress}...`, 'INFO');
-      // Offload printing to backend to avoid browser CORS/mixed-content issues
-      printTicket(
-        assignedPrinter.ipAddress, 
-        ticket, 
-        service?.name || 'Tjeneste', 
-        getWaitTime(serviceId),
-        language,
-        branding.brandText,
-        branding.brandLogoUrl,
-      ).then(success => {
-        if (!success) {
-          console.warn("Kunne ikke nå skriveren. Sjekk nettverk/CORS.");
-        }
-      });
-    } else {
+    if (!assignedPrinter || !assignedPrinter.ipAddress) {
       setPrintingStatus(t('kiosk.noPrinter'));
     }
 

@@ -131,7 +131,7 @@ export interface QueueContextType {
   setAuthProviders: (config: Partial<AuthProviderConfig>) => void;
   
   // Ticket Actions
-  addTicket: (serviceId: string) => Promise<Ticket>;
+  addTicket: (serviceId: string, kioskId?: string, language?: 'en' | 'no') => Promise<Ticket>;
   updateTicketStatus: (ticketId: string, status: TicketStatus, counterId?: string) => void;
   callNextTicket: (counterId: string) => void;
   callSpecificTicket: (ticketId: string, counterId: string) => void;

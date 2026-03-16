@@ -1114,7 +1114,7 @@ io.on('connection', (socket) => {
 
   // --- Ticket Handlers ---
 
-  socket.on('add-ticket', ({ serviceId }) => {
+  socket.on('add-ticket', async ({ serviceId, kioskId, language }) => {
     if (state.isClosed) {
       addLog('Forsøk på å trekke billett mens systemet er stengt', 'ALERT');
       socket.emit('add-ticket-denied', { error: 'closed' });
@@ -1155,6 +1155,51 @@ io.on('connection', (socket) => {
     
     saveState();
     io.emit('state-update', state); // Broadcast to all
+
+    // Kiosk-driven printing happens server-side to avoid exposing API keys in browser clients.
+    const kioskKey = typeof kioskId === 'string' && kioskId.trim().length > 0 ? kioskId.trim() : '';
+    if (!kioskKey) return;
+
+    const kiosk = state.kiosks.find(k => k.id === kioskKey);
+    const assignedPrinterId = kiosk?.assignedPrinterId || state.kioskPrinterAssignments?.[kioskKey];
+    const printer = state.printers.find(p => p.id === assignedPrinterId);
+    if (!printer?.ipAddress) {
+      addLog(`Ingen skriver tilordnet kiosk ${kioskKey} ved utskrift av ${newTicket.number}`, 'INFO');
+      return;
+    }
+
+    const lang = language === 'en' ? 'en' : 'no';
+    const serviceWaitingCount = state.tickets.filter(t => t.serviceId === serviceId && t.status === 'WAITING').length;
+    const waitPerPerson = service.estimatedTimePerPersonMinutes || 1;
+    const waitTime = serviceWaitingCount * waitPerPerson;
+    const printUrl = `http://127.0.0.1:${process.env.PORT || 3000}/api/print-ticket`;
+    const headers = { 'Content-Type': 'application/json' };
+    if (API_KEY_REQUIRED && API_KEYS[0]) {
+      headers['x-api-key'] = API_KEYS[0];
+    }
+
+    try {
+      const response = await fetch(printUrl, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          ipAddress: printer.ipAddress,
+          port: printer.port || 9100,
+          ticket: newTicket,
+          serviceName: service.name,
+          waitTime,
+          language: lang,
+          brandText: state.branding?.brandText,
+          brandLogoUrl: state.branding?.brandLogoUrl,
+        }),
+      });
+
+      if (!response.ok) {
+        addLog(`Kiosk-utskrift feilet for ${newTicket.number} via ${printer.ipAddress}:${printer.port || 9100} (HTTP ${response.status})`, 'ALERT');
+      }
+    } catch (err) {
+      addLog(`Kiosk-utskrift feilet for ${newTicket.number} via ${printer.ipAddress}:${printer.port || 9100}: ${err?.message || err}`, 'ALERT');
+    }
   });
 
   socket.on('update-ticket-status', ({ ticketId, status, counterId }) => {

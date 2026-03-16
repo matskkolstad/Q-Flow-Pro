@@ -267,9 +267,9 @@ export const QueueProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       // Keeping interface, but maybe no-op or emit 'log' event if needed.
   };
 
-    const addTicket = (serviceId: string): Promise<Ticket> => {
+    const addTicket = (serviceId: string, kioskId?: string, language?: 'en' | 'no'): Promise<Ticket> => {
         const requestStarted = Date.now();
-        socket.emit('add-ticket', { serviceId });
+        socket.emit('add-ticket', { serviceId, kioskId, language });
 
         return new Promise((resolve) => {
             const cleanup = () => {
