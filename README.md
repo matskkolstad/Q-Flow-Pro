@@ -3,6 +3,10 @@
   <p>Queue and counter management with real-time updates, public displays, kiosk, counter screens, and admin panel.</p>
 </div>
 
+## 🌐 Demo
+
+A live demo of the application is available here: **https://qflow-demo.matskk.com**
+
 ## ⚠️ Important Disclaimer
 
 **This application is entirely developed using Artificial Intelligence (AI).**
@@ -34,6 +38,7 @@ The owner of this software makes **NO WARRANTIES** and assumes **NO LIABILITY** 
 - **[systemd Setup](docs/systemd.en.md)** - Linux service configuration ([Norwegian version](docs/systemd.md))
 
 ## Table of Contents
+- [Demo](#-demo)
 - [Features](#features)
 - [Architecture](#architecture)
 - [Screenshots](#screenshots)
