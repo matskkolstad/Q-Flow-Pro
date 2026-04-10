@@ -259,12 +259,16 @@ const checkApiRateLimit = (ip) => {
   return { allowed: true, remaining: MAX_API_REQUESTS - recent.length };
 };
 
+const IPV6_MAPPED_IPV4_PREFIX = '::ffff:';
+
 const normalizeClientIp = (raw) => {
   if (typeof raw !== 'string') return '';
   let candidate = raw.split(',')[0].trim();
   if (!candidate) return '';
   if (candidate === '::1') return '127.0.0.1';
-  if (candidate.startsWith('::ffff:')) candidate = candidate.slice(7);
+  if (candidate.startsWith(IPV6_MAPPED_IPV4_PREFIX)) {
+    candidate = candidate.slice(IPV6_MAPPED_IPV4_PREFIX.length);
+  }
   if (/^\d{1,3}(?:\.\d{1,3}){3}:\d+$/.test(candidate)) {
     candidate = candidate.split(':')[0];
   }
@@ -328,10 +332,11 @@ const isIPAllowed = (ip) => {
     // Basic CIDR support (e.g., 192.168.1.0/24)
     if (allowed.includes('/') && isIPv4(normalizedIp)) {
       const [network, bitsRaw] = allowed.split('/');
+      const normalizedNetwork = normalizeClientIp(network);
       const bits = Number(bitsRaw);
-      if (!Number.isInteger(bits) || bits < 0 || bits > 32 || !isIPv4(network)) continue;
+      if (!Number.isInteger(bits) || bits < 0 || bits > 32 || !isIPv4(normalizedNetwork)) continue;
       const mask = bits === 0 ? 0 : (-1 << (32 - bits));
-      const networkInt = ipToInt(network);
+      const networkInt = ipToInt(normalizedNetwork);
       const ipInt = ipToInt(normalizedIp);
       if ((ipInt & mask) === (networkInt & mask)) return true;
     }
