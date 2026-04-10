@@ -259,6 +259,31 @@ const checkApiRateLimit = (ip) => {
   return { allowed: true, remaining: MAX_API_REQUESTS - recent.length };
 };
 
+const normalizeClientIp = (raw) => {
+  if (typeof raw !== 'string') return '';
+  let candidate = raw.split(',')[0].trim();
+  if (!candidate) return '';
+  if (candidate === '::1') return '127.0.0.1';
+  if (candidate.startsWith('::ffff:')) candidate = candidate.slice(7);
+  if (/^\d{1,3}(?:\.\d{1,3}){3}:\d+$/.test(candidate)) {
+    candidate = candidate.split(':')[0];
+  }
+  if (candidate.startsWith('[')) {
+    const closing = candidate.indexOf(']');
+    if (closing > 0) candidate = candidate.slice(1, closing);
+  }
+  return candidate;
+};
+
+const getClientIp = (req) => {
+  const forwarded = req.headers?.['x-forwarded-for'];
+  const raw = Array.isArray(forwarded) ? forwarded[0] : (forwarded || req.ip || '');
+  const normalized = normalizeClientIp(raw);
+  return normalized || 'unknown';
+};
+
+const isIPv4 = (ip) => /^\d{1,3}(?:\.\d{1,3}){3}$/.test(ip);
+
 // Middleware: General API rate limiting
 const apiRateLimiter = (req, res, next) => {
   // Skip rate limiting for health endpoint
@@ -267,7 +292,7 @@ const apiRateLimiter = (req, res, next) => {
   // Apply rate limiting to API endpoints only
   if (!req.path.startsWith('/api/')) return next();
   
-  const ip = req.ip || req.headers['x-forwarded-for'] || 'unknown';
+  const ip = getClientIp(req);
   const check = checkApiRateLimit(ip);
   
   // Set rate limit headers
@@ -294,15 +319,20 @@ const isIPAllowed = (ip) => {
   if (ALLOWED_API_IPS.length === 0) return true; // No whitelist = allow all
   
   // Simple IP matching (exact match or CIDR prefix)
+  const normalizedIp = normalizeClientIp(ip);
+  if (!normalizedIp) return false;
   for (const allowed of ALLOWED_API_IPS) {
-    if (allowed === ip) return true;
+    const normalizedAllowed = normalizeClientIp(allowed);
+    if (normalizedAllowed === normalizedIp) return true;
     
     // Basic CIDR support (e.g., 192.168.1.0/24)
-    if (allowed.includes('/')) {
-      const [network, bits] = allowed.split('/');
-      const mask = -1 << (32 - parseInt(bits));
+    if (allowed.includes('/') && isIPv4(normalizedIp)) {
+      const [network, bitsRaw] = allowed.split('/');
+      const bits = Number(bitsRaw);
+      if (!Number.isInteger(bits) || bits < 0 || bits > 32 || !isIPv4(network)) continue;
+      const mask = bits === 0 ? 0 : (-1 << (32 - bits));
       const networkInt = ipToInt(network);
-      const ipInt = ipToInt(ip);
+      const ipInt = ipToInt(normalizedIp);
       if ((ipInt & mask) === (networkInt & mask)) return true;
     }
   }
@@ -313,7 +343,9 @@ const ipToInt = (ip) => {
   if (!ip || typeof ip !== 'string') return 0;
   const parts = ip.split('.');
   if (parts.length !== 4) return 0;
-  return parts.reduce((acc, octet) => (acc << 8) + parseInt(octet, 10), 0) >>> 0;
+  const nums = parts.map((octet) => Number(octet));
+  if (nums.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return 0;
+  return nums.reduce((acc, octet) => (acc << 8) + octet, 0) >>> 0;
 };
 
 // Middleware: Validate API key
@@ -322,7 +354,7 @@ const requireApiKey = (req, res, next) => {
   
   const apiKey = req.headers['x-api-key'] || req.query.apiKey;
   if (!apiKey || !API_KEYS.includes(apiKey)) {
-    const ip = req.ip || req.headers['x-forwarded-for'] || 'unknown';
+    const ip = getClientIp(req);
     addLog(`API access denied: invalid or missing API key from ${ip}`, 'ALERT');
     return res.status(401).json({ error: 'invalid_api_key' });
   }
@@ -331,7 +363,7 @@ const requireApiKey = (req, res, next) => {
 
 // Middleware: Validate IP whitelist
 const requireAllowedIP = (req, res, next) => {
-  const ip = req.ip || req.headers['x-forwarded-for'] || 'unknown';
+  const ip = getClientIp(req);
   if (!isIPAllowed(ip)) {
     addLog(`API access denied: IP ${ip} not in whitelist`, 'ALERT');
     return res.status(403).json({ error: 'ip_not_allowed' });
@@ -800,7 +832,7 @@ app.post('/api/login', (req, res) => {
     addLog('Innlogging feilet: mangler brukernavn eller passord', 'ALERT');
     return res.status(400).json({ error: 'missing_credentials' });
   }
-  const ip = req.ip || req.headers['x-forwarded-for'] || 'unknown';
+  const ip = getClientIp(req);
   if (isLoginBlocked(ip)) {
     addLog(`Innlogging blokkert for ${username} fra ${ip} (for mange forsøk)`, 'ALERT');
     return res.status(429).json({ error: 'too_many_attempts' });
@@ -915,7 +947,7 @@ app.get('/api/auth/providers', (req, res) => {
 
 // Google OAuth routes
 app.get('/auth/google', (req, res, next) => {
-  const ip = req.ip || req.headers['x-forwarded-for'] || 'unknown';
+  const ip = getClientIp(req);
   if (isLoginBlocked(ip)) {
     addLog(`Google OAuth blokkert for ${ip} (for mange forsøk)`, 'ALERT');
     return res.status(429).json({ error: 'too_many_attempts' });
@@ -928,7 +960,7 @@ app.get('/auth/google', (req, res, next) => {
 });
 
 app.get('/auth/google/callback', (req, res, next) => {
-  const ip = req.ip || req.headers['x-forwarded-for'] || 'unknown';
+  const ip = getClientIp(req);
   registerLoginAttempt(ip); // Count attempt
   
   if (!isGoogleConfigured(state)) {
@@ -961,7 +993,7 @@ app.get('/auth/google/callback', (req, res, next) => {
 
 // OIDC routes
 app.get('/auth/oidc', (req, res, next) => {
-  const ip = req.ip || req.headers['x-forwarded-for'] || 'unknown';
+  const ip = getClientIp(req);
   if (isLoginBlocked(ip)) {
     addLog(`OIDC OAuth blokkert for ${ip} (for mange forsøk)`, 'ALERT');
     return res.status(429).json({ error: 'too_many_attempts' });
@@ -974,7 +1006,7 @@ app.get('/auth/oidc', (req, res, next) => {
 });
 
 app.get('/auth/oidc/callback', (req, res, next) => {
-  const ip = req.ip || req.headers['x-forwarded-for'] || 'unknown';
+  const ip = getClientIp(req);
   registerLoginAttempt(ip); // Count attempt
   
   if (!isOIDCConfigured(state)) {
