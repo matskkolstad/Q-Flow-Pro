@@ -39,6 +39,8 @@ const App: React.FC = () => {
                 <Route path="/kiosk" element={<ProtectedRoute requireAdmin><Kiosk /></ProtectedRoute>} />
                 <Route path="display" element={<PublicDisplay />} />
                 <Route path="/display" element={<PublicDisplay />} />
+                <Route path="public" element={<PublicDisplay />} />
+                <Route path="/public" element={<PublicDisplay />} />
                 <Route path="counter-display" element={<CounterDisplay />} />
                 <Route path="/counter-display" element={<CounterDisplay />} />
                 <Route path="admin" element={<ProtectedRoute><AdminDashboard /></ProtectedRoute>} />

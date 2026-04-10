@@ -85,7 +85,7 @@ npm run dev             # Vite dev on 5173, API proxied to 3000
 ```
 - Frontend dev: http://localhost:5173
 - Backend: http://localhost:3000
-- **Default users on first run** (`db.json` defaults): admin/admin, operator/operator
+- **Default users on first run** (`db.json` defaults): admin/Admin123!, operator/Operator123!
 - ⚠️ **SECURITY**: Default users are automatically flagged to change password on first login. You will be prompted to set a secure password immediately after logging in for the first time.
 
 ## Environment Variables

@@ -66,6 +66,13 @@ test.describe('Q-Flow happy paths', () => {
     expect(body.status).toBe('ok');
   });
 
+  test('public display route alias resolves', async ({ request }) => {
+    const res = await request.get(`${BASE_URL}/#/public`);
+    expect(res.status()).toBe(200);
+    const html = await res.text();
+    expect(html).toMatch(/<!doctype html>/i);
+  });
+
   test('admin auth and backup endpoints', async ({ request }) => {
     const loginRes = await request.post(`${BASE_URL}/api/login`, {
       data: { username: 'admin', password: 'Admin123!' },

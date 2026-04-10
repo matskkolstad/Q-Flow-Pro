@@ -112,8 +112,8 @@ Open your browser and navigate to `http://localhost:3000`
 ### 2. Login with Default Credentials
 
 **Default users** (automatically created on first run):
-- **Admin Account**: username `admin` / password `admin`
-- **Operator Account**: username `operator` / password `operator`
+- **Admin Account**: username `admin` / password `Admin123!`
+- **Operator Account**: username `operator` / password `Operator123!`
 
 ⚠️ **IMPORTANT**: You will be **automatically prompted** to change these passwords on first login. This is a security requirement and cannot be skipped.
 
