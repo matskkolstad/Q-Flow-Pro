@@ -34,8 +34,8 @@
     "react-dom": "^18.2.0",
     "react-router-dom": "^6.22.3",
     "sharp": "^0.33.4",
-    "socket.io": "^4.7.4",
-    "socket.io-client": "^4.7.4"
+    "socket.io": "^4.8.3",
+    "socket.io-client": "^4.8.3"
   },
   "devDependencies": {
     "@playwright/test": "^1.42.1",
@@ -48,5 +48,14 @@
     "tailwindcss": "^3.4.1",
     "typescript": "^5.2.2",
     "vite": "^5.1.6"
+  },
+  "overrides": {
+    "socket.io-parser": "^4.2.6",
+    "path-to-regexp": "0.1.13",
+    "picomatch": "^2.3.2",
+    "tinyglobby": {
+      "picomatch": "^4.0.4"
+    },
+    "rollup": "^4.59.1"
   }
 }

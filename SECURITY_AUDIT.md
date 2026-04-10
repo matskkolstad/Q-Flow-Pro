@@ -1,6 +1,6 @@
 # Security Audit Report
 
-## Date: 2026-02-15
+## Date: 2026-04-10
 
 ## ⚠️ AI Development Disclaimer
 
@@ -23,6 +23,13 @@ The owner makes **NO WARRANTIES** of any kind and assumes **NO LIABILITY** for:
 ---
 
 ## Security Enhancements (Latest Update)
+
+### Dependency Risk Remediation (2026-04-10)
+- **Socket.IO**: Updated `socket.io` / `socket.io-client` to 4.8.3 (pulls `socket.io-parser` >= 4.2.6) to fix high-severity attachment flooding (GHSA-677m-j7p3-52f9)
+- **Express routing**: Forced `path-to-regexp` to 0.1.13 to mitigate ReDoS on routes with multiple parameters (GHSA-37ch-88jc-xwx2)
+- **Glob matching**: Forced `picomatch` to patched versions (2.3.2 and 4.0.4 for transitive deps) to eliminate method injection/ReDoS risks
+- **Build toolchain**: Forced `rollup` to 4.59.1 to close the arbitrary file write advisory (GHSA-mw96-cpmx-2vgc)
+- **Status**: `npm audit` now reports **0 high/critical** issues; remaining **2 moderate** advisories are Vite/esbuild dev-only (see Known Vulnerabilities)
 
 ### New Security Features Implemented
 
@@ -78,35 +85,23 @@ The owner makes **NO WARRANTIES** of any kind and assumes **NO LIABILITY** for:
 
 ### Known Vulnerabilities
 
-#### esbuild vulnerability (GHSA-67mh-4wv8-2f99)
-- **Severity**: Moderate
-- **Package**: esbuild <=0.24.2
-- **Issue**: esbuild enables any website to send requests to the development server and read the response
-- **Impact**: Development-only vulnerability. Does not affect production builds.
-- **Status**: Not fixed (requires vite upgrade which is a breaking change)
-- **Recommendation**: 
-  - Do NOT expose the development server to untrusted networks
-  - Only run `npm run dev` on localhost or in trusted development environments
-  - Production deployments (`npm run build` + `npm start`) are NOT affected
-
-#### vite dependency chain
-- **Severity**: Moderate
-- **Package**: vite 0.11.0 - 6.1.6
-- **Issue**: Depends on vulnerable versions of esbuild
-- **Impact**: Development-only
-- **Status**: Not fixed (breaking change)
-- **Recommendation**: 
-  - Upgrade to vite 7.x+ when ready to handle breaking changes
-  - Current version (5.1.6) is functional and safe for production use
+#### Vite / esbuild (development-only)
+- **Severity**: Moderate (2 findings)
+- **Packages**: vite <= 6.4.1 (path traversal in `.map` handling), esbuild <= 0.24.2 (dev server request leakage)
+- **Impact**: Development-time only; production build artifacts are not affected
+- **Status**: Not fixed (requires major Vite upgrade)
+- **Recommendations**:
+  - Run `npm run dev` only on trusted networks/hosts
+  - Prefer production build + `npm start` for any exposed environment
+  - Plan upgrade testing to Vite 8.x when feasible to drop these advisories
 
 ### Summary
-Both vulnerabilities affect **development dependencies only** and do not pose a risk to production deployments. The application builds and runs safely in production mode.
+- Runtime dependencies: **no known high/critical vulnerabilities outstanding** after April 2026 updates.
+- Development dependencies: **2 moderate** advisories remain (Vite/esbuild) and are isolated to the dev server pipeline.
 
 ### Actions Required
-- [ ] Monitor for vite 7.x stable release
-- [ ] Test application with vite 7.x when available
-- [ ] Update dependencies when breaking changes can be accommodated
-- [ ] Continue to run development server only on trusted networks
+- [ ] Schedule a Vite upgrade/migration (target 8.x) and validate build/test matrix
+- [ ] Keep running the dev server only on trusted networks until upgrade is complete
 
 ### Mitigation in Place
 - Development server is configured to bind to localhost by default
