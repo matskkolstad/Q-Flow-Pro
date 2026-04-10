@@ -99,6 +99,7 @@ const translations: Translations = {
     'display.goTo': 'Go to',
     'display.qr.title': 'Draw digitally',
     'display.qr.subtitle': 'Scan the code to use your mobile',
+    'display.qr.unavailable': 'QR unavailable',
     'display.closed.title': 'Closed',
     'display.closed.subtitle': 'The queue system is temporarily closed. Please wait until we open again.',
 
@@ -378,6 +379,7 @@ const translations: Translations = {
     'display.goTo': 'Gå til',
     'display.qr.title': 'Trekk digitalt',
     'display.qr.subtitle': 'Skann koden for å bruke mobilen',
+    'display.qr.unavailable': 'QR utilgjengelig',
     'display.closed.title': 'Stengt',
     'display.closed.subtitle': 'Køsystemet er midlertidig stengt. Vennligst vent til vi åpner igjen.',
 
