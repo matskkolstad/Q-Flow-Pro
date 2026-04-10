@@ -11,6 +11,7 @@ const MobileClient: React.FC = () => {
   const [myTicketId, setMyTicketId] = useState<string | null>(null);
   const navigate = useNavigate();
     const { t } = useI18n();
+    const brandName = (branding.brandText || '').trim() || 'Q-Flow Pro';
 
   const myTicket = tickets.find(t => t.id === myTicketId);
 
@@ -134,7 +135,7 @@ const MobileClient: React.FC = () => {
       </div>
 
       <div className="text-white/60 text-xs text-center font-medium">
-        Q-Flow Pro Mobile Client
+        {brandName} Mobile Client
       </div>
     </div>
   );

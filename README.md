@@ -55,6 +55,7 @@ The owner of this software makes **NO WARRANTIES** and assumes **NO LIABILITY** 
 - Pull tickets from kiosk, mobile client, or operator.
 - Real-time updates via Socket.IO (queue state, calls, messages).
 - Public display (“now serving”) and counter display for targeted calls.
+- Public display QR code is generated locally in the browser (no external QR service dependency).
 - Admin panel for services, counters, users, printers, announcements, sound, and closing.
 - Security: session TTL, password policy, helmet headers, sanitized settings, optional CSP.
 - SQLite persistence with backups, log rotation, and `/health` endpoint.
@@ -139,6 +140,7 @@ Exposes port 3000. Set env vars via compose or an `.env` file referenced there.
 - Admin → General: set `brandText` and `brandLogoUrl` (base64/url). Empty `brandText` hides the text.
 - Logo component allows custom logo + text; fallback is “Q-Flow Pro” only when text is unset.
 - Text color is controlled per usage via `textClass` (dark UIs use white text).
+- Branding/logo is propagated to main views and closed overlays (home, login, kiosk, public display, counter display, mobile, admin).
 
 ## Data & Persistence
 - SQLite DB at `data/qflow.db`; backups at `data/backups/`; logs at `data/logs/` (all git-ignored).

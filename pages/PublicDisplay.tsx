@@ -6,6 +6,7 @@ import { audioService } from '../services/audioService';
 import { ArrowRight, Clock, X, Smartphone } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { useI18n } from '../context/I18nContext';
+import QRCode from 'qrcode';
 
 const PublicDisplay: React.FC = () => {
   const { tickets, counters, services, publicMessage, isClosed, branding } = useQueue();
@@ -14,6 +15,8 @@ const PublicDisplay: React.FC = () => {
   const footerRef = useRef<HTMLDivElement>(null);
   const [contentHeight, setContentHeight] = useState<number>();
   const [mobileUrl, setMobileUrl] = useState<string>('');
+  const [qrDataUrl, setQrDataUrl] = useState<string>('');
+  const [qrFailed, setQrFailed] = useState<boolean>(false);
 
   // Mark this client as a display so only this screen plays sounds
   useEffect(() => {
@@ -38,6 +41,33 @@ const PublicDisplay: React.FC = () => {
     const cleanPath = pathname.endsWith('/') ? (pathname.slice(0, -1) || '/') : pathname;
     setMobileUrl(`${origin}${cleanPath}#/mobile/new`);
   }, []);
+
+  useEffect(() => {
+    if (!mobileUrl) {
+      setQrDataUrl('');
+      setQrFailed(false);
+      return;
+    }
+    let active = true;
+    setQrFailed(false);
+    QRCode.toDataURL(mobileUrl, { width: 180, margin: 1 })
+      .then((dataUrl) => {
+        if (active) {
+          setQrDataUrl(dataUrl);
+          setQrFailed(false);
+        }
+      })
+      .catch((err) => {
+        console.warn('QR generation failed:', err);
+        if (active) {
+          setQrDataUrl('');
+          setQrFailed(true);
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, [mobileUrl]);
 
   // Lock main content height to viewport (header + footer subtracted) to avoid page scrolling; sections can scroll internally
   useLayoutEffect(() => {
@@ -178,11 +208,19 @@ const PublicDisplay: React.FC = () => {
                   )}
                  </div>
                 <div className="bg-white p-2 rounded-2xl shadow-lg relative z-10">
-                  <img
-                   src={`https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(mobileUrl || '#')}`}
-                   alt="QR kode for digital kølapp"
-                   className="w-24 h-24 mix-blend-multiply"
-                  />
+                  {qrDataUrl ? (
+                    <img
+                      src={qrDataUrl}
+                      alt="QR kode for digital kølapp"
+                      className="w-24 h-24 mix-blend-multiply"
+                    />
+                  ) : qrFailed ? (
+                    <div className="w-24 h-24 bg-gray-100 rounded-xl border border-gray-200 flex items-center justify-center text-center px-2">
+                      <span className="text-xs font-semibold text-gray-500 leading-tight">{t('display.qr.unavailable')}</span>
+                    </div>
+                  ) : (
+                    <div className="w-24 h-24 bg-gray-100 rounded-xl animate-pulse" aria-hidden="true" />
+                  )}
                 </div>
             </div>
         </div>
@@ -204,7 +242,7 @@ const PublicDisplay: React.FC = () => {
       )}
       {isClosed && (
         <div className="absolute inset-0 bg-black/90 z-50 flex flex-col items-center justify-center text-center px-6">
-          <Logo className="mb-4" textClass="text-white" />
+          <Logo className="mb-4" textClass="text-white" brandText={branding.brandText} brandLogoUrl={branding.brandLogoUrl} />
           <p className="text-4xl lg:text-5xl font-black text-white mb-2">{t('display.closed.title')}</p>
           <p className="text-lg lg:text-xl text-gray-300 max-w-2xl">{t('display.closed.subtitle')}</p>
         </div>
