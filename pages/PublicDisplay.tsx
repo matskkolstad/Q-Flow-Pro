@@ -204,7 +204,7 @@ const PublicDisplay: React.FC = () => {
       )}
       {isClosed && (
         <div className="absolute inset-0 bg-black/90 z-50 flex flex-col items-center justify-center text-center px-6">
-          <Logo className="mb-4" textClass="text-white" />
+          <Logo className="mb-4" textClass="text-white" brandText={branding.brandText} brandLogoUrl={branding.brandLogoUrl} />
           <p className="text-4xl lg:text-5xl font-black text-white mb-2">{t('display.closed.title')}</p>
           <p className="text-lg lg:text-xl text-gray-300 max-w-2xl">{t('display.closed.subtitle')}</p>
         </div>

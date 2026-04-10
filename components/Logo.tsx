@@ -28,7 +28,6 @@ export const Logo: React.FC<LogoProps> = ({
           src={brandLogoUrl}
           alt={altText}
           className={`object-contain rounded-xl shadow-sm bg-white flex-shrink-0 ${className}`}
-          style={{ maxHeight: '3.5rem', maxWidth: '3.5rem' }}
         />
       ) : (
         <div className={`bg-indigo-600 rounded-xl p-2 text-white flex items-center justify-center shadow-sm flex-shrink-0 ${className}`}>

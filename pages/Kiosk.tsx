@@ -20,6 +20,7 @@ const Kiosk: React.FC = () => {
   const [pinError, setPinError] = useState('');
   const tapResetRef = useRef<NodeJS.Timeout | null>(null);
   const navigate = useNavigate();
+  const brandName = (branding.brandText || '').trim();
 
   useEffect(() => {
     // Generate persistent ID for this browser client
@@ -190,7 +191,7 @@ const Kiosk: React.FC = () => {
       </div>
       
       <div className="p-8 text-center text-gray-400 text-sm font-medium">
-            {t('kiosk.footer.id')}: <span className="font-mono text-gray-500">{kioskId.substr(-4).toUpperCase()}</span> • {branding.brandText}
+            {t('kiosk.footer.id')}: <span className="font-mono text-gray-500">{kioskId.substr(-4).toUpperCase()}</span>{brandName ? ` • ${brandName}` : ''}
       </div>
 
       {publicMessage && (

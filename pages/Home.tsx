@@ -23,6 +23,7 @@ const Home: React.FC = () => {
   const navigate = useNavigate();
   const { t } = useI18n();
   const isAdmin = user?.role === 'ADMIN';
+  const brandName = (branding.brandText || '').trim() || 'Q-Flow Pro';
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center p-6">
       <div className="text-center mb-12">
@@ -111,7 +112,7 @@ const Home: React.FC = () => {
       </div>
       
       <div className="mt-12 text-sm text-gray-400">
-        &copy; {new Date().getFullYear()} Q-Flow Pro. {t('home.footer')}
+        &copy; {new Date().getFullYear()} {brandName}. {t('home.footer')}
       </div>
     </div>
   );
