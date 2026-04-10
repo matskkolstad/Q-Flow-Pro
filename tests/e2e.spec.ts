@@ -70,7 +70,7 @@ test.describe('Q-Flow happy paths', () => {
     const res = await request.get(`${BASE_URL}/#/public`);
     expect(res.status()).toBe(200);
     const html = await res.text();
-    expect(html).toContain('<!doctype html');
+    expect(html).toMatch(/<!doctype html>/i);
   });
 
   test('admin auth and backup endpoints', async ({ request }) => {
