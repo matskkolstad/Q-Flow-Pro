@@ -6,6 +6,7 @@ import { audioService } from '../services/audioService';
 import { ArrowRight, Clock, X, Smartphone } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { useI18n } from '../context/I18nContext';
+import QRCode from 'qrcode';
 
 const PublicDisplay: React.FC = () => {
   const { tickets, counters, services, publicMessage, isClosed, branding } = useQueue();
@@ -14,6 +15,7 @@ const PublicDisplay: React.FC = () => {
   const footerRef = useRef<HTMLDivElement>(null);
   const [contentHeight, setContentHeight] = useState<number>();
   const [mobileUrl, setMobileUrl] = useState<string>('');
+  const [qrDataUrl, setQrDataUrl] = useState<string>('');
 
   // Mark this client as a display so only this screen plays sounds
   useEffect(() => {
@@ -38,6 +40,24 @@ const PublicDisplay: React.FC = () => {
     const cleanPath = pathname.endsWith('/') ? (pathname.slice(0, -1) || '/') : pathname;
     setMobileUrl(`${origin}${cleanPath}#/mobile/new`);
   }, []);
+
+  useEffect(() => {
+    if (!mobileUrl) {
+      setQrDataUrl('');
+      return;
+    }
+    let active = true;
+    QRCode.toDataURL(mobileUrl, { width: 180, margin: 1 })
+      .then((dataUrl) => {
+        if (active) setQrDataUrl(dataUrl);
+      })
+      .catch(() => {
+        if (active) setQrDataUrl('');
+      });
+    return () => {
+      active = false;
+    };
+  }, [mobileUrl]);
 
   // Lock main content height to viewport (header + footer subtracted) to avoid page scrolling; sections can scroll internally
   useLayoutEffect(() => {
@@ -178,11 +198,15 @@ const PublicDisplay: React.FC = () => {
                   )}
                  </div>
                 <div className="bg-white p-2 rounded-2xl shadow-lg relative z-10">
-                  <img
-                   src={`https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(mobileUrl || '#')}`}
-                   alt="QR kode for digital kølapp"
-                   className="w-24 h-24 mix-blend-multiply"
-                  />
+                  {qrDataUrl ? (
+                    <img
+                      src={qrDataUrl}
+                      alt="QR kode for digital kølapp"
+                      className="w-24 h-24 mix-blend-multiply"
+                    />
+                  ) : (
+                    <div className="w-24 h-24 bg-gray-100 rounded-xl animate-pulse" aria-hidden="true" />
+                  )}
                 </div>
             </div>
         </div>
