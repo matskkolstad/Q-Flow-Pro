@@ -5,7 +5,7 @@
 
 ## 🌐 Demo
 
-Det finnes en live demo av applikasjonen her: **https://qflow-demo.matskk.com**
+A live demo of the application is available here: **https://qflow-demo.matskk.com**
 
 ## ⚠️ Important Disclaimer
 
