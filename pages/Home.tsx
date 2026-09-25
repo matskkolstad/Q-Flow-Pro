@@ -18,11 +18,12 @@ const ModeCard: React.FC<{ to: string; title: string; desc: string; icon: React.
 );
 
 const Home: React.FC = () => {
-  const { branding } = useQueue();
+  const { branding, session } = useQueue();
   const { user, logout } = useAuth();
   const navigate = useNavigate();
   const { t } = useI18n();
   const isAdmin = user?.role === 'ADMIN';
+  const isKioskDevice = !!session?.kioskId;
   const brandName = (branding.brandText || '').trim() || 'Q-Flow Pro';
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center p-6">
@@ -66,7 +67,7 @@ const Home: React.FC = () => {
           />
         )}
 
-        {isAdmin && (
+        {(isAdmin || isKioskDevice) && (
           <ModeCard 
             to="/kiosk" 
             title={t('home.card.kiosk.title')} 

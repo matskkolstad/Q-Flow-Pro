@@ -10,15 +10,23 @@ const MobileClient: React.FC = () => {
     const { services, addTicket, tickets, getWaitTime, branding, isClosed, publicMessage } = useQueue();
   const [myTicketId, setMyTicketId] = useState<string | null>(null);
   const navigate = useNavigate();
-    const { t } = useI18n();
+    const { t, language } = useI18n();
     const brandName = (branding.brandText || '').trim() || 'Q-Flow Pro';
 
   const myTicket = tickets.find(t => t.id === myTicketId);
 
+    const [drawError, setDrawError] = useState('');
+
     const handleDrawTicket = async (serviceId: string) => {
         if (isClosed) return;
-        const t = await addTicket(serviceId);
-        setMyTicketId(t.id);
+        setDrawError('');
+        const result = await addTicket(serviceId, language);
+        if (!result.ok || !result.ticket) {
+            const known = ['closed', 'service_unavailable', 'rate_limited', 'queue_full'];
+            setDrawError(t(known.includes(result.error) ? `ticket.error.${result.error}` : 'ticket.error.generic'));
+            return;
+        }
+        setMyTicketId(result.ticket.id);
     };
 
   if (!myTicket) {
@@ -33,6 +41,9 @@ const MobileClient: React.FC = () => {
             <Logo className="h-12 w-12 mb-8 mt-12" textClass="text-3xl font-black" brandText={branding.brandText} brandLogoUrl={branding.brandLogoUrl} />
             <div className="bg-white w-full max-w-sm rounded-[2rem] shadow-xl p-8 border border-gray-100">
                 <h2 className="text-2xl font-bold text-center mb-8 text-gray-900">{t('mobile.title')}</h2>
+                {drawError && (
+                    <p role="alert" className="mb-4 bg-red-50 border border-red-200 text-red-700 text-sm font-semibold px-4 py-3 rounded-2xl text-center">{drawError}</p>
+                )}
                 <div className="space-y-4">
                     {services.map(s => (
                         <button 

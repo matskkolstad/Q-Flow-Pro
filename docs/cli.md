@@ -1,6 +1,6 @@
 # Bruker-CLI for Q-Flow Pro
 
-CLI-et lar deg administrere brukere (liste, opprette, oppdatere, slette) uten å starte appen. Alle endringer lagres i `db.json`.
+CLI-et lar deg administrere brukere (liste, opprette, oppdatere, slette) uten å starte appen. Alle endringer lagres i SQLite-databasen (`data/qflow.db`, eller `QFLOW_DATA_DIR`). Stopp serveren først, eller start den på nytt etterpå: en kjørende server har sin egen kopi av brukerne i minnet.
 
 ## Forutsetninger
 - Node er installert.

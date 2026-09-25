@@ -33,8 +33,8 @@ See [LICENSE](LICENSE) for complete terms.
 
 ### First-Time Installation
 
-1. **Change Default Passwords Immediately**
-   - Default users (admin/operator) are automatically prompted to change passwords on first login
+1. **Secure the First Admin Account**
+   - The first admin gets `QFLOW_ADMIN_PASSWORD` or a generated password printed once in the server log; a generated password must be changed at first login
    - Use strong, unique passwords for each user
    - Never reuse passwords across different systems
 

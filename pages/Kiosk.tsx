@@ -1,19 +1,83 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useQueue } from '../context/QueueContext';
+import { useAuth } from '../context/AuthContext';
 import { Ticket } from '../types';
-import { Printer, Clock, Info, X } from 'lucide-react';
+import { Printer, Clock, Info, X, MonitorSmartphone } from 'lucide-react';
 import { Logo } from '../components/Logo';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { audioService } from '../services/audioService';
 import { useI18n } from '../context/I18nContext';
 
+const KIOSK_HEARTBEAT_MS = 30000;
+const KNOWN_TICKET_ERRORS = ['closed', 'service_unavailable', 'rate_limited', 'queue_full'];
+
+// Shown when this browser is not an activated kiosk device.
+const KioskGate: React.FC = () => {
+  const { branding, activateKiosk } = useQueue();
+  const { user, logout } = useAuth();
+  const { t } = useI18n();
+  const [working, setWorking] = useState(false);
+  const [error, setError] = useState('');
+
+  const handleActivate = async () => {
+    setWorking(true);
+    setError('');
+    const result = await activateKiosk();
+    if (!result.ok) {
+      setError(t('kiosk.activate.failed'));
+      setWorking(false);
+      return;
+    }
+    // The kiosk now runs on its own device token; the admin session must not stay on the device.
+    await logout();
+    setWorking(false);
+  };
+
+  const isAdmin = user?.role === 'ADMIN';
+  return (
+    <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center p-6 font-sans">
+      <div className="bg-white shadow-lg border border-gray-100 rounded-2xl p-8 w-full max-w-lg text-center">
+        <Logo className="h-12 w-12" textClass="text-3xl" brandText={branding.brandText} brandLogoUrl={branding.brandLogoUrl} />
+        <div className="w-14 h-14 rounded-2xl bg-indigo-50 text-indigo-600 flex items-center justify-center mx-auto mt-6 mb-4">
+          <MonitorSmartphone size={28} />
+        </div>
+        <h1 className="text-2xl font-bold text-gray-900 mb-2">{isAdmin ? t('kiosk.activate.title') : t('kiosk.notActivated.title')}</h1>
+        <p className="text-gray-500 text-sm mb-6">{isAdmin ? t('kiosk.activate.desc') : t('kiosk.notActivated.desc')}</p>
+        {error && <p className="text-sm text-red-600 font-semibold mb-4">{error}</p>}
+        {isAdmin ? (
+          <button
+            onClick={handleActivate}
+            disabled={working}
+            className="w-full bg-indigo-600 text-white font-semibold py-3 rounded-lg shadow hover:bg-indigo-700 transition disabled:opacity-60"
+          >
+            {t('kiosk.activate.button')}
+          </button>
+        ) : (
+          <Link to="/login" className="inline-block w-full bg-indigo-600 text-white font-semibold py-3 rounded-lg shadow hover:bg-indigo-700 transition">
+            {t('kiosk.notActivated.login')}
+          </Link>
+        )}
+      </div>
+      <Link to="/" className="mt-6 text-sm text-gray-600 hover:text-gray-800">{t('login.back')}</Link>
+    </div>
+  );
+};
+
 const Kiosk: React.FC = () => {
-  const { services, addTicket, getWaitTime, registerKiosk, kiosks, printers, soundSettings, branding, kioskExitPin, isClosed, publicMessage } = useQueue();
+  const { session } = useQueue();
+  const { t } = useI18n();
+  if (!session) return <div className="p-6 text-center text-gray-600">{t('common.loading')}</div>;
+  if (!session.kioskId) return <KioskGate />;
+  return <KioskScreen kioskId={session.kioskId} />;
+};
+
+const KioskScreen: React.FC<{ kioskId: string }> = ({ kioskId }) => {
+  const { services, addTicket, getWaitTime, registerKiosk, verifyKioskPin, soundSettings, branding, isClosed, publicMessage } = useQueue();
   const [activeTicket, setActiveTicket] = useState<Ticket | null>(null);
   const [isPrinting, setIsPrinting] = useState(false);
   const { t, language } = useI18n();
   const [printingStatus, setPrintingStatus] = useState(t('kiosk.printing'));
-  const [kioskId, setKioskId] = useState<string>("");
+  const [ticketError, setTicketError] = useState('');
   const [tapCount, setTapCount] = useState(0);
   const [showPinModal, setShowPinModal] = useState(false);
   const [pinInput, setPinInput] = useState('');
@@ -23,45 +87,30 @@ const Kiosk: React.FC = () => {
   const brandName = (branding.brandText || '').trim();
 
   useEffect(() => {
-    // Generate persistent ID for this browser client
-    let id = localStorage.getItem('qflow_this_kiosk_id');
-    if (!id) {
-        id = `kiosk_${Math.random().toString(36).substr(2, 6)}`;
-        localStorage.setItem('qflow_this_kiosk_id', id);
-    }
-    setKioskId(id);
-    
-    // Auto-register with Admin
-    registerKiosk(id, `Kiosk ${id.substr(-4).toUpperCase()}`);
-    
-    // Periodic Keep-alive
-    const interval = setInterval(() => {
-        registerKiosk(id, `Kiosk ${id.substr(-4).toUpperCase()}`);
-    }, 30000);
-    
+    // Heartbeat so the admin panel sees this kiosk; identity comes from the device token.
+    registerKiosk();
+    const interval = setInterval(registerKiosk, KIOSK_HEARTBEAT_MS);
     return () => clearInterval(interval);
-  }, []);
+  }, [kioskId]);
 
   const handleTicketSelect = async (serviceId: string) => {
     if (isClosed) return;
+    setTicketError('');
     setIsPrinting(true);
     setPrintingStatus(t('kiosk.printingTicket'));
 
     // Simulate printing delay visually
     await new Promise(resolve => setTimeout(resolve, 1500));
-    
-    // Create ticket in system and wait for assigned number
-    const ticket = await addTicket(serviceId, kioskId, language);
-    
-    // Serveren forsøker fysisk utskrift når kioskId er sendt med add-ticket.
-    const myConfig = kiosks.find(k => k.id === kioskId);
-    const assignedPrinter = printers.find(p => p.id === myConfig?.assignedPrinterId);
-    if (!assignedPrinter || !assignedPrinter.ipAddress) {
-      setPrintingStatus(t('kiosk.noPrinter'));
+
+    // The server prints on this kiosk's assigned printer and returns the ticket.
+    const result = await addTicket(serviceId, language);
+    setIsPrinting(false);
+    if (!result.ok || !result.ticket) {
+      setTicketError(t(KNOWN_TICKET_ERRORS.includes(result.error) ? `ticket.error.${result.error}` : 'ticket.error.generic'));
+      return;
     }
 
-    setActiveTicket(ticket);
-    setIsPrinting(false);
+    setActiveTicket(result.ticket);
     if (soundSettings.kioskEffects) {
       audioService.playEffect('print');
     }
@@ -84,14 +133,15 @@ const Kiosk: React.FC = () => {
     }
   };
 
-  const handlePinSubmit = () => {
-    if (pinInput.trim() === kioskExitPin) {
+  const handlePinSubmit = async () => {
+    const result = await verifyKioskPin(pinInput.trim());
+    if (result.ok) {
       setShowPinModal(false);
       setPinInput('');
       navigate('/');
-    } else {
-      setPinError(t('kiosk.pin.error'));
+      return;
     }
+    setPinError(t(result.error === 'pin_not_set' ? 'kiosk.pin.notSet' : result.error === 'rate_limited' ? 'kiosk.pin.rateLimited' : 'kiosk.pin.error'));
   };
 
   if (activeTicket) {
@@ -160,7 +210,10 @@ const Kiosk: React.FC = () => {
         <div className="mb-16 text-center">
             <Logo className="h-20 w-20 mb-6 mx-auto" textClass="text-6xl block mt-4" brandText={branding.brandText} brandLogoUrl={branding.brandLogoUrl} />
             <h2 className="text-3xl font-light text-gray-500 mt-4">{t('kiosk.chooseService')}</h2>
-            
+            {ticketError && (
+              <p role="alert" className="mt-6 inline-block bg-red-50 border border-red-200 text-red-700 font-semibold px-5 py-3 rounded-xl">{ticketError}</p>
+            )}
+
         </div>
 
         {isPrinting ? (

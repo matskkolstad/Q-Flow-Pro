@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode, useRef } from 'react';
 import { io, Socket } from 'socket.io-client';
-import { Ticket, Service, Counter, LogEntry, QueueContextType, TicketStatus, User, Printer, KioskConfig, SoundSettings, CounterDisplay, BrandingConfig, AuthProviderConfig } from '../types';
+import { Ticket, Service, Counter, LogEntry, QueueContextType, TicketStatus, User, Printer, KioskConfig, SoundSettings, CounterDisplay, BrandingConfig, AuthProviderConfig, SessionInfo, AddTicketResult, ActionResult } from '../types';
 import { audioService } from '../services/audioService';
 import { useI18n } from './I18nContext';
 
@@ -17,10 +17,26 @@ const socketBase = (() => {
     return undefined; // same-origin
 })();
 
+// Kiosk devices authenticate with their own device token instead of a user session.
+export const DEVICE_TOKEN_KEY = 'qflow_device_token';
+export const KIOSK_ID_KEY = 'qflow_this_kiosk_id';
+
+const readStorage = (key: string) => {
+    if (typeof window === 'undefined') return undefined;
+    try {
+        return localStorage.getItem(key) || undefined;
+    } catch {
+        return undefined;
+    }
+};
+
+const ACK_TIMEOUT_MS = 8000;
+
 const socket: Socket = io(socketBase, {
     path: '/socket.io',
     auth: {
-        token: typeof window !== 'undefined' ? localStorage.getItem('qflow_token') : undefined,
+        token: readStorage('qflow_token'),
+        deviceToken: readStorage(DEVICE_TOKEN_KEY),
     },
     // Prefer long-polling first to avoid LAN WebSocket quirks on Safari/iOS; WS upgrade happens if possible
     transports: ['polling', 'websocket'],
@@ -46,7 +62,8 @@ export const QueueProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [publicMessage, setPublicMessage] = useState("");
     const [branding, setBrandingState] = useState<BrandingConfig>({ brandText: 'Q-Flow Pro', brandLogoUrl: '' });
-    const [kioskExitPin, setKioskExitPinState] = useState<string>('1234');
+    const [kioskExitPinSet, setKioskExitPinSet] = useState<boolean>(false);
+    const [session, setSession] = useState<SessionInfo | null>(null);
     const [isClosed, setIsClosed] = useState(false);
     const [soundSettings, setSoundSettingsState] = useState<SoundSettings>({
         kioskEffects: true,
@@ -58,7 +75,6 @@ export const QueueProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         google: {
             enabled: false,
             clientId: '',
-            clientSecret: '',
             allowedDomains: [],
             autoProvision: false,
             defaultRole: 'OPERATOR'
@@ -67,9 +83,9 @@ export const QueueProvider: React.FC<{ children: ReactNode }> = ({ children }) =
             enabled: false,
             issuerUrl: '',
             clientId: '',
-            clientSecret: '',
             autoProvision: false,
-            defaultRole: 'OPERATOR'
+            defaultRole: 'OPERATOR',
+            requireVerifiedEmail: true
         }
     });
     const soundSettingsRef = useRef<SoundSettings>(soundSettings);
@@ -93,7 +109,7 @@ export const QueueProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         setLogs(state.logs || []);
         setPublicMessage(state.publicMessage || "");
         setBrandingState(state.branding || { brandText: 'Q-Flow Pro', brandLogoUrl: '' });
-        setKioskExitPinState(state.kioskExitPin ?? '1234');
+        setKioskExitPinSet(!!state.kioskExitPinSet);
         setIsClosed(!!state.isClosed);
         setSoundSettingsState(state.soundSettings || {
             kioskEffects: true,
@@ -107,31 +123,15 @@ export const QueueProvider: React.FC<{ children: ReactNode }> = ({ children }) =
             callChime: true,
             callVoice: true
         };
-        setAuthProvidersState(state.authProviders || {
-            google: {
-                enabled: false,
-                clientId: '',
-                clientSecret: '',
-                allowedDomains: [],
-                autoProvision: false,
-                defaultRole: 'OPERATOR'
-            },
-            oidc: {
-                enabled: false,
-                issuerUrl: '',
-                clientId: '',
-                clientSecret: '',
-                autoProvision: false,
-                defaultRole: 'OPERATOR'
-            }
-        });
+        // Only admins receive auth provider settings; keep the previous value otherwise.
+        if (state.authProviders) setAuthProvidersState(state.authProviders);
     };
 
     useEffect(() => {
         const applyAuthToken = (token?: string | null) => {
             if (typeof window === 'undefined') return;
-            const nextToken = token ?? localStorage.getItem('qflow_token');
-            socket.auth = { ...(socket.auth || {}), token: nextToken || undefined };
+            const nextToken = token === undefined ? readStorage('qflow_token') : token;
+            socket.auth = { token: nextToken || undefined, deviceToken: readStorage(DEVICE_TOKEN_KEY) };
             // Reconnect to send auth in handshake if token changed
             if (socket.connected) {
                 socket.disconnect();
@@ -155,6 +155,8 @@ export const QueueProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         const onStorage = (event: StorageEvent) => {
             if (event.key === 'qflow_token') {
                 applyAuthToken(event.newValue);
+            } else if (event.key === DEVICE_TOKEN_KEY) {
+                applyAuthToken();
             }
         };
 
@@ -182,6 +184,22 @@ export const QueueProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
                 socket.on('state-update', applyState);
 
+        socket.on('session-info', (info: SessionInfo) => {
+            setSession(info);
+        });
+
+        socket.on('settings-error', (payload: any) => {
+            const code = payload?.error;
+            const msg = code === 'invalid_pin'
+                ? t('admin.general.pin.invalid')
+                : code === 'invalid_printer'
+                    ? t('admin.devices.invalidPrinter')
+                    : code === 'invalid_logo'
+                        ? t('admin.general.invalidLogo')
+                        : t('admin.settings.saveError');
+            setLastError(msg);
+        });
+
         socket.on('log-event', (log: any) => {
             setLogs((prev) => [log, ...prev].slice(0, 500));
         });
@@ -194,7 +212,11 @@ export const QueueProvider: React.FC<{ children: ReactNode }> = ({ children }) =
                     ? 'Passordet må ha stor, liten bokstav og tall.'
                     : code === 'must_have_admin'
                         ? 'Det må være minst én admin.'
-                        : 'Kunne ikke oppdatere bruker(e).';
+                        : code === 'duplicate_username'
+                            ? 'Brukernavnet er allerede i bruk.'
+                            : code === 'password_required'
+                                ? 'Nye brukere må ha et passord.'
+                                : 'Kunne ikke oppdatere bruker(e).';
             setLastError(msg);
         });
 
@@ -251,6 +273,8 @@ export const QueueProvider: React.FC<{ children: ReactNode }> = ({ children }) =
             socket.off('connect', requestState);
             socket.off('init-state');
             socket.off('state-update');
+            socket.off('session-info');
+            socket.off('settings-error');
             socket.off('log-event');
             socket.off('update-users-error');
             socket.off('play-sound');
@@ -267,55 +291,16 @@ export const QueueProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       // Keeping interface, but maybe no-op or emit 'log' event if needed.
   };
 
-    const addTicket = (serviceId: string, kioskId?: string, language?: 'en' | 'no'): Promise<Ticket> => {
-        const requestStarted = Date.now();
-        socket.emit('add-ticket', { serviceId, kioskId, language });
-
+    // The server answers with the created ticket (or a reason), so concurrent kiosks never mix up numbers.
+    const addTicket = (serviceId: string, language?: 'en' | 'no'): Promise<AddTicketResult> => {
         return new Promise((resolve) => {
-            const cleanup = () => {
-                socket.off('state-update', handler);
-                socket.off('add-ticket-denied', onDenied);
-                clearTimeout(fallback);
-            };
-
-            const onDenied = (payload: any) => {
-                cleanup();
-                resolve({
-                    id: 'denied',
-                    number: payload?.error || 'Stengt',
-                    serviceId,
-                    status: TicketStatus.CANCELLED,
-                    createdAt: requestStarted,
-                });
-            };
-
-            const handler = (state: any) => {
-                const list = state?.tickets || [];
-                const latest = list
-                    .filter((t: Ticket) => t.serviceId === serviceId)
-                    .sort((a: Ticket, b: Ticket) => b.createdAt - a.createdAt)[0];
-
-                if (latest && latest.createdAt >= requestStarted - 2000) {
-                    cleanup();
-                    resolve(latest);
+            socket.timeout(ACK_TIMEOUT_MS).emit('add-ticket', { serviceId, language }, (err: Error | null, res?: AddTicketResult) => {
+                if (err || !res) {
+                    resolve({ ok: false, error: 'timeout' });
+                    return;
                 }
-            };
-
-            // Safety timeout so UI still proceeds even if no state arrives
-            const fallback = setTimeout(() => {
-                cleanup();
-                const service = services.find(s => s.id === serviceId);
-                resolve({
-                    id: 'temp',
-                    number: '...',
-                    serviceId,
-                    status: TicketStatus.WAITING,
-                    createdAt: requestStarted,
-                });
-            }, 2000);
-
-            socket.on('state-update', handler);
-            socket.once('add-ticket-denied', onDenied);
+                resolve(res);
+            });
         });
     };
 
@@ -412,7 +397,7 @@ export const QueueProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       updateCounter(id, { isOnline });
   };
 
-  const addUser = (userData: Omit<User, 'id'> & { password?: string }) => {
+  const addUser = (userData: Omit<User, 'id'> & { password: string }) => {
       const newUser = { ...userData, id: Math.random().toString(36).substr(2, 9) };
       syncSettings({ users: [...users, newUser] });
   };
@@ -438,7 +423,6 @@ export const QueueProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   };
 
   const setKioskExitPin = (pin: string) => {
-      setKioskExitPinState(pin);
       syncSettings({ kioskExitPin: pin });
   };
 
@@ -480,8 +464,46 @@ export const QueueProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       syncSettings({ printers: printers.filter(p => p.id !== id) });
   };
 
-  const registerKiosk = (id: string, name: string) => {
-      socket.emit('register-kiosk', { id, name });
+  const registerKiosk = () => {
+      socket.emit('register-kiosk');
+  };
+
+  const reconnectWithStoredCredentials = () => {
+      socket.auth = { token: readStorage('qflow_token'), deviceToken: readStorage(DEVICE_TOKEN_KEY) };
+      socket.disconnect();
+      socket.connect();
+  };
+
+  // Admin only: turns this browser into a kiosk with its own device token.
+  const activateKiosk = (): Promise<ActionResult> => {
+      return new Promise((resolve) => {
+          socket.timeout(ACK_TIMEOUT_MS).emit('activate-kiosk', { kioskId: readStorage(KIOSK_ID_KEY) }, (err: Error | null, res?: { ok: boolean; error?: string; deviceToken?: string; kioskId?: string }) => {
+              if (err || !res?.ok || !res.deviceToken || !res.kioskId) {
+                  resolve({ ok: false, error: res?.error || 'timeout' });
+                  return;
+              }
+              localStorage.setItem(DEVICE_TOKEN_KEY, res.deviceToken);
+              localStorage.setItem(KIOSK_ID_KEY, res.kioskId);
+              resolve({ ok: true });
+          });
+      });
+  };
+
+  // Kiosk only: the server checks the exit PIN and deactivates the device on success.
+  const verifyKioskPin = (pin: string): Promise<ActionResult> => {
+      return new Promise((resolve) => {
+          socket.timeout(ACK_TIMEOUT_MS).emit('verify-kiosk-pin', { pin }, (err: Error | null, res?: ActionResult) => {
+              if (err || !res) {
+                  resolve({ ok: false, error: 'timeout' });
+                  return;
+              }
+              if (res.ok) {
+                  localStorage.removeItem(DEVICE_TOKEN_KEY);
+                  reconnectWithStoredCredentials();
+              }
+              resolve(res);
+          });
+      });
   };
 
   const assignPrinterToKiosk = (kioskId: string, printerId: string) => {
@@ -527,8 +549,9 @@ export const QueueProvider: React.FC<{ children: ReactNode }> = ({ children }) =
             services, counters, tickets, logs, users, printers, kiosks, counterDisplays, isClosed, publicMessage, 
     soundSettings,
     branding,
-    kioskExitPin,
+    kioskExitPinSet,
     authProviders,
+    session,
     setPublicMessage: setPublicMessageWrapper,
     setSoundSettings,
     setBranding,
@@ -540,7 +563,7 @@ export const QueueProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           addService, removeService, addCounter, removeCounter, updateCounterStatus, updateCounter,
           updateService,
           addUser, updateUser, removeUser, 
-        addPrinter, removePrinter, registerKiosk, assignPrinterToKiosk, removeKiosk,
+        addPrinter, removePrinter, registerKiosk, activateKiosk, verifyKioskPin, assignPrinterToKiosk, removeKiosk,
                 registerCounterDisplay, assignCounterDisplay, removeCounterDisplay, setCounterDisplayMessage,
         triggerSound,
       addLog, getWaitTime, resetSystem

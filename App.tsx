@@ -35,8 +35,9 @@ const App: React.FC = () => {
                 <Route path="/" element={<Home />} />
                 <Route path="login" element={<Login />} />
                 <Route path="/login" element={<Login />} />
-                <Route path="kiosk" element={<ProtectedRoute requireAdmin><Kiosk /></ProtectedRoute>} />
-                <Route path="/kiosk" element={<ProtectedRoute requireAdmin><Kiosk /></ProtectedRoute>} />
+                {/* The kiosk page checks itself whether this device is an activated kiosk */}
+                <Route path="kiosk" element={<Kiosk />} />
+                <Route path="/kiosk" element={<Kiosk />} />
                 <Route path="display" element={<PublicDisplay />} />
                 <Route path="/display" element={<PublicDisplay />} />
                 <Route path="public" element={<PublicDisplay />} />

@@ -20,8 +20,7 @@ export interface User {
   name: string;
   role: 'ADMIN' | 'OPERATOR';
   username: string;
-  passwordHash?: string; // stored hashed
-  pinCode?: string; // legacy
+  hasPassword?: boolean; // Has a local password (hashes never leave the server)
   mustChangePassword?: boolean; // Force password change on next login
   email?: string; // Email from external auth provider
   externalId?: string; // ID from external auth provider (e.g., Google ID, OIDC sub)
@@ -87,7 +86,8 @@ export interface AuthProviderConfig {
   google: {
     enabled: boolean;
     clientId: string;
-    clientSecret: string;
+    clientSecret?: string; // write-only: sent to the server, never received
+    clientSecretSet?: boolean;
     allowedDomains?: string[]; // Optional: restrict to specific Google Workspace domains
     autoProvision: boolean; // Auto-create users on first login
     defaultRole: 'ADMIN' | 'OPERATOR'; // Default role for auto-provisioned users
@@ -96,9 +96,11 @@ export interface AuthProviderConfig {
     enabled: boolean;
     issuerUrl: string;
     clientId: string;
-    clientSecret: string;
+    clientSecret?: string; // write-only: sent to the server, never received
+    clientSecretSet?: boolean;
     autoProvision: boolean;
     defaultRole: 'ADMIN' | 'OPERATOR';
+    requireVerifiedEmail?: boolean; // Only link/provision accounts when the provider verified the e-mail
   };
 }
 
@@ -108,6 +110,25 @@ export interface LogEntry {
   message: string;
   type: 'INFO' | 'ACTION' | 'ALERT';
 }
+
+export type ClientRole = 'PUBLIC' | 'KIOSK' | 'OPERATOR' | 'ADMIN';
+
+// Who the server considers this browser to be (sent on connect and when it changes).
+export interface SessionInfo {
+  role: ClientRole;
+  kioskId?: string | null;
+  mustChangePassword?: boolean;
+}
+
+// ok=true comes with the created ticket, ok=false with an error code.
+export interface AddTicketResult {
+  ok: boolean;
+  ticket?: Ticket;
+  error?: string;
+  printing?: boolean;
+}
+
+export type ActionResult = { ok: boolean; error?: string };
 
 export interface QueueContextType {
   services: Service[];
@@ -122,8 +143,9 @@ export interface QueueContextType {
   soundSettings: SoundSettings;
   publicMessage: string;
   branding: BrandingConfig;
-  kioskExitPin: string;
+  kioskExitPinSet: boolean;
   authProviders: AuthProviderConfig;
+  session: SessionInfo | null;
   setPublicMessage: (msg: string) => void;
   setSoundSettings: (settings: Partial<SoundSettings>) => void;
   setBranding: (branding: Partial<BrandingConfig>) => void;
@@ -131,7 +153,7 @@ export interface QueueContextType {
   setAuthProviders: (config: Partial<AuthProviderConfig>) => void;
   
   // Ticket Actions
-  addTicket: (serviceId: string, kioskId?: string, language?: 'en' | 'no') => Promise<Ticket>;
+  addTicket: (serviceId: string, language?: 'en' | 'no') => Promise<AddTicketResult>;
   updateTicketStatus: (ticketId: string, status: TicketStatus, counterId?: string) => void;
   callNextTicket: (counterId: string) => void;
   callSpecificTicket: (ticketId: string, counterId: string) => void;
@@ -145,14 +167,16 @@ export interface QueueContextType {
   updateCounter: (id: string, updates: Partial<Counter>) => void;
   removeCounter: (id: string) => void;
   updateCounterStatus: (counterId: string, isOnline: boolean) => void;
-  addUser: (user: Omit<User, 'id'>) => void;
+  addUser: (user: Omit<User, 'id'> & { password: string }) => void;
   updateUser: (id: string, updates: Partial<User> & { password?: string }) => void;
   removeUser: (id: string) => void;
   
   // Printer/Device Actions
   addPrinter: (printer: Omit<Printer, 'id' | 'status'>) => void;
   removePrinter: (id: string) => void;
-  registerKiosk: (id: string, name: string) => void;
+  registerKiosk: () => void;
+  activateKiosk: () => Promise<ActionResult>;
+  verifyKioskPin: (pin: string) => Promise<ActionResult>;
   assignPrinterToKiosk: (kioskId: string, printerId: string) => void;
   removeKiosk: (id: string) => void;
   registerCounterDisplay: (id: string, name: string, counterId?: string) => void;

@@ -109,31 +109,29 @@ The server will start on `http://localhost:3000`
 ### 1. Access the Application
 Open your browser and navigate to `http://localhost:3000`
 
-### 2. Login with Default Credentials
+### 2. Log in as the first admin
 
-**Default users** (automatically created on first run):
-- **Admin Account**: username `admin` / password `Admin123!`
-- **Operator Account**: username `operator` / password `Operator123!`
+There are no built-in default passwords. On the very first start (empty database) the server creates one admin account:
+- **Username**: `admin` (or `QFLOW_ADMIN_USERNAME`)
+- **Password**: the value of `QFLOW_ADMIN_PASSWORD` if set; otherwise a random password that is printed **once** in the server output:
 
-⚠️ **IMPORTANT**: You will be **automatically prompted** to change these passwords on first login. This is a security requirement and cannot be skipped.
+```
+==================================================================
+ Q-Flow Pro: first admin account created
+   username: admin
+   password: <random>
+ You will be asked to change this password after the first login.
+==================================================================
+```
 
-### 3. Change Default Passwords (Automatic)
+Find it with `journalctl -u qflow` (systemd) or `docker compose logs qflow` (Docker).
 
-The system will display a password change modal immediately after logging in with a default account:
-1. Log in with default credentials
-2. A modal will appear requiring password change
-3. Enter the current (default) password
-4. Enter a new secure password:
-   - Minimum 8 characters
-   - Must include uppercase letters
-   - Must include lowercase letters
-   - Must include at least one digit
-5. Confirm the new password
-6. Click "Change Password"
+### 3. Change the password and create users
 
-The password change is enforced and you cannot proceed without completing it.
+If the password was generated, a password change is required after the first login (enforced by the server).
+Then create operator accounts under **Settings → Users**. Tick "Must change password at next login" to make them choose their own password.
 
-**Repeat for both admin and operator accounts.**
+Upgrading from an older version? The first start after the upgrade signs everyone out once (old session tokens were exposed by earlier versions), and accounts that still use a default password (`Admin123!`, `Operator123!`, …) must change it at their next login.
 
 ### 4. Configure Services and Counters
 1. Go to Settings → Services
@@ -163,8 +161,9 @@ npm run test:e2e
 ```
 
 **Prerequisites for E2E tests**:
-- The server must be running (`npm start` in a separate terminal)
-- Default users (admin/Admin123!) must exist
+- The server must be running on a **fresh** data directory, e.g.
+  `QFLOW_DATA_DIR=/tmp/qflow-e2e QFLOW_ADMIN_PASSWORD='CiAdmin123!' TRUST_PROXY=false API_RATE_LIMIT_PER_MINUTE=1000 npm start`
+- Run the tests with the same admin password: `QFLOW_ADMIN_PASSWORD='CiAdmin123!' npm run test:e2e`
 
 ### Manual Testing Checklist
 

@@ -1,6 +1,6 @@
 # User CLI for Q-Flow Pro
 
-The CLI allows you to manage users (list, create, update, delete) without starting the app. All changes are saved in `db.json`.
+The CLI allows you to manage users (list, create, update, delete) without starting the app. All changes are saved in the SQLite database (`data/qflow.db`, or `QFLOW_DATA_DIR`). Stop the server first, or restart it afterwards: a running server keeps its own copy of the users in memory.
 
 ## Prerequisites
 - Node.js is installed.
