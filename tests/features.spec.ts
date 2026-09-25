@@ -1,3 +1,4 @@
+import { randomBytes } from 'crypto';
 import { test, expect } from '@playwright/test';
 import {
   BASE_URL,
@@ -22,7 +23,7 @@ const createServiceWithCounters = async (admin: any, counterCount = 1) => {
   // Prefixes are max 3 characters; retry on the (rare) collision with an existing service.
   let serviceRes: any = { ok: false };
   for (let attempt = 0; attempt < 30 && !serviceRes.ok; attempt++) {
-    const prefix = `Q${Math.random().toString(36).slice(2, 4).toUpperCase()}`;
+    const prefix = `Q${randomBytes(1).toString('hex').toUpperCase()}`;
     serviceRes = await emitWithAck(admin.socket, 'service:save', { service: { name: uniqueName('Tjeneste '), prefix, color: '#0891b2' } });
   }
   expect(serviceRes.ok).toBe(true);

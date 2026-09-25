@@ -1,10 +1,11 @@
+import { randomBytes } from 'crypto';
 import { io, Socket } from 'socket.io-client';
 
 export const BASE_URL = process.env.E2E_BASE_URL || 'http://localhost:3000';
 export const ADMIN_USERNAME = process.env.QFLOW_ADMIN_USERNAME || 'admin';
 export const ADMIN_PASSWORD = process.env.QFLOW_ADMIN_PASSWORD || 'CiAdmin123!';
 
-export const uniqueName = (prefix: string) => `${prefix}${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+export const uniqueName = (prefix: string) => `${prefix}${Date.now().toString(36)}${randomBytes(3).toString('hex')}`;
 
 export const apiPost = (path: string, body: unknown, token?: string, headers: Record<string, string> = {}) =>
   fetch(`${BASE_URL}${path}`, {

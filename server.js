@@ -10,6 +10,7 @@ import net from 'net';
 import crypto from 'crypto';
 import fs from 'fs';
 import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
 import {
   loadState as loadStateFromStore,
   saveState as saveStateToStore,
@@ -341,6 +342,18 @@ const hasValidApiKey = (req) => {
   return API_KEYS.some((k) => safeEqual(k, apiKey));
 };
 
+// Extra limit for the admin routes that read or write backup files (on top of the global API limit).
+const backupFileLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 30,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  keyGenerator: (req) => getClientIp(req),
+  // getClientIp already applies TRUST_PROXY; the library's own proxy checks do not apply.
+  validate: false,
+  message: { error: 'too_many_requests' },
+});
+
 const requireAllowedIP = (req, res, next) => {
   const ip = getClientIp(req);
   if (!isIPAllowed(ip)) {
@@ -490,7 +503,7 @@ const bootstrapAdmin = () => {
     passwordHash: hashPassword(password),
     mustChangePassword: generated,
   });
-  addLog(`Opprettet første administrator "${username}"`, 'ALERT');
+  addLog('Opprettet første administrator', 'ALERT');
   if (generated) {
     console.log('\n==================================================================');
     console.log(' Q-Flow Pro: first admin account created');
@@ -1161,7 +1174,7 @@ app.get('/api/stats/export.csv', requireAuth(['ADMIN']), (req, res) => {
 
 // --- Backups ---
 
-app.post('/api/admin/backup', requireAllowedIP, requireAuth(['ADMIN']), async (req, res) => {
+app.post('/api/admin/backup', requireAllowedIP, backupFileLimiter, requireAuth(['ADMIN']), async (req, res) => {
   try {
     const file = await runBackup('manual', req.auth.user.username);
     return res.json({ ok: true, file });
@@ -1171,7 +1184,7 @@ app.post('/api/admin/backup', requireAllowedIP, requireAuth(['ADMIN']), async (r
   }
 });
 
-app.get('/api/admin/backups', requireAllowedIP, requireAuth(['ADMIN']), (req, res) => {
+app.get('/api/admin/backups', requireAllowedIP, backupFileLimiter, requireAuth(['ADMIN']), (req, res) => {
   try {
     return res.json({ ok: true, backups: listBackups() });
   } catch (err) {
@@ -1180,14 +1193,14 @@ app.get('/api/admin/backups', requireAllowedIP, requireAuth(['ADMIN']), (req, re
   }
 });
 
-app.get('/api/admin/backup/:file', requireAllowedIP, requireAuth(['ADMIN']), (req, res) => {
+app.get('/api/admin/backup/:file', requireAllowedIP, backupFileLimiter, requireAuth(['ADMIN']), (req, res) => {
   const target = backupPath(req.params.file);
   if (!target) return res.status(404).json({ error: 'not_found' });
   addLog(`Backup lastet ned: ${req.params.file} av ${req.auth.user.username}`, 'ACTION');
   return res.download(target, req.params.file);
 });
 
-app.delete('/api/admin/backup/:file', requireAllowedIP, requireAuth(['ADMIN']), (req, res) => {
+app.delete('/api/admin/backup/:file', requireAllowedIP, backupFileLimiter, requireAuth(['ADMIN']), (req, res) => {
   const target = backupPath(req.params.file);
   if (!target) return res.status(404).json({ error: 'not_found' });
   fs.unlinkSync(target);
@@ -1221,7 +1234,7 @@ const restoreBackup = async (file, actor) => {
   return safety;
 };
 
-app.post('/api/admin/backup/:file/restore', requireAllowedIP, requireAuth(['ADMIN']), async (req, res) => {
+app.post('/api/admin/backup/:file/restore', requireAllowedIP, backupFileLimiter, requireAuth(['ADMIN']), async (req, res) => {
   const target = backupPath(req.params.file);
   if (!target) return res.status(404).json({ error: 'not_found' });
   try {
@@ -1236,9 +1249,11 @@ app.post('/api/admin/backup/:file/restore', requireAllowedIP, requireAuth(['ADMI
 app.post(
   '/api/admin/backups/upload',
   requireAllowedIP,
+  backupFileLimiter,
   requireAuth(['ADMIN']),
   express.raw({ type: 'application/octet-stream', limit: '200mb' }),
   (req, res) => {
+    if (!Buffer.isBuffer(req.body)) return res.status(400).json({ error: 'not_a_sqlite_database' });
     try {
       const file = saveUploadedBackup(req.body);
       addLog(`Backup lastet opp: ${file} av ${req.auth.user.username}`, 'ACTION');

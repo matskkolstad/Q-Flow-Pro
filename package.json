@@ -30,6 +30,7 @@
     "bcryptjs": "^2.4.3",
     "better-sqlite3": "^12.6.2",
     "express": "^4.22.3",
+    "express-rate-limit": "^8.7.0",
     "express-session": "^1.18.0",
     "helmet": "^8.1.0",
     "lucide-react": "^0.344.0",

@@ -28,7 +28,7 @@ const CounterDisplay: React.FC = () => {
     if (typeof window === 'undefined') return 'counter-display';
     const stored = localStorage.getItem('qflow_counter_display_id');
     if (stored) return stored;
-    const generated = `cd_${Math.random().toString(36).substr(2, 6)}`;
+    const generated = `cd_${Array.from(crypto.getRandomValues(new Uint8Array(4)), (b) => b.toString(16).padStart(2, '0')).join('')}`;
     localStorage.setItem('qflow_counter_display_id', generated);
     return generated;
   });
