@@ -29,7 +29,7 @@
 - Counter displays: connection indicator, heartbeat, translated labels.
 
 ### Design
-- Upload a logo (resized in the browser, served from `/api/branding/logo` with its own CSP) or use a URL.
+- Upload a logo (resized in the browser, served from `/api/branding/logo` with its own CSP) or use a URL. Printed tickets only use an uploaded logo; the server no longer downloads logos from web addresses.
 - Main colour: the whole interface (buttons, highlights, screens) follows it.
 - Brand name, ticket footer, announcement text and public address (for QR codes) in *Settings → Design*.
 - Page title and favicon follow the brand; web app manifest; bundled Inter font (no Google Fonts).

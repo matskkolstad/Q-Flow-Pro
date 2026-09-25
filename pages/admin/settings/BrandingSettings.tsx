@@ -125,6 +125,7 @@ const BrandingSettings: React.FC = () => {
             <input id="logo-url" type="url" value={logoUrl} onChange={(e) => setLogoUrl(e.target.value)} placeholder="https://example.com/logo.png" className={inputClass} />
             <Button variant="secondary" onClick={saveLogoUrl} disabled={!logoUrl.trim()}>{t('common.save')}</Button>
           </div>
+          <p className="text-xs text-gray-500 mt-1">{t('admin.branding.logoUrlHelp')}</p>
         </div>
       </Card>
 

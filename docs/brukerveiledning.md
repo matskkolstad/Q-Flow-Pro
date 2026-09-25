@@ -66,7 +66,7 @@ Alt ligger under **Innstillinger** i adminpanelet.
 - **Nullstill system**: tømmer køen og starter nummereringen på nytt. Statistikken beholdes. Skjer også automatisk hver natt.
 
 ### Design
-- **Logo**: last opp PNG, JPG, WebP eller SVG (store bilder skaleres ned), eller bruk en nettadresse.
+- **Logo**: last opp PNG, JPG, WebP eller SVG (store bilder skaleres ned), eller bruk en nettadresse. En logo fra nettadresse vises bare på skjermene; vil du ha logoen på utskrevne billetter, må den lastes opp.
 - **Navn ved logo**, **hovedfarge** (hele grensesnittet følger fargen) og **tekst nederst på billetten**.
 - **Taleoppkalling**: teksten som leses opp, for eksempel `Nummer {number}, til {counter}`.
 - **Offentlig adresse**: adressen kundene skal bruke i QR-koder, for eksempel `https://kø.firma.no`. La stå tom for å bruke adressen skjermen ble åpnet på.
