@@ -36,3 +36,38 @@ test.describe('browser flows', () => {
     await expect(page.locator('text=/^K\\d{3}$/')).toBeVisible();
   });
 });
+
+test.describe('customer flows', () => {
+  test('a phone draws a ticket, follows it and can cancel it', async ({ page }) => {
+    await page.goto('/#/mobile/new');
+    await page.getByRole('button', { name: /Levering/ }).first().click();
+    await expect(page).toHaveURL(/#\/ticket\/[a-f0-9]+\?k=/);
+    await expect(page.getByText(/^L\d{3}$/)).toBeVisible();
+
+    // A reload keeps the ticket (link + local storage)
+    await page.reload();
+    await expect(page.getByText(/^L\d{3}$/)).toBeVisible();
+
+    page.once('dialog', (dialog) => dialog.accept());
+    await page.getByRole('button', { name: /Avbestill|Cancel my ticket/ }).click();
+    await expect(page.getByText(/kansellert|cancelled/i).first()).toBeVisible();
+  });
+
+  test('the operator panel calls the next ticket', async ({ page }) => {
+    await page.goto('/#/login');
+    await page.locator('input[autocomplete="username"]').fill(ADMIN_USERNAME);
+    await page.locator('input[autocomplete="current-password"]').fill(ADMIN_PASSWORD);
+    await page.locator('form button[type="submit"]').click();
+    await expect(page.getByText(/Operatør \/ Admin|Operator \/ Admin/)).toBeVisible();
+    await page.goto('/#/admin');
+    await expect(page.getByRole('navigation')).toBeVisible();
+    // Make sure there is something to call for the selected counter
+    await page.goto('/#/mobile/new');
+    await page.getByRole('button', { name: /Kundeservice/ }).first().click();
+    await expect(page).toHaveURL(/#\/ticket\//);
+    await page.goto('/#/admin');
+    const callNext = page.getByRole('button', { name: /Kall inn neste|Call next|Fullfør og kall neste|Complete & call next/ }).first();
+    await callNext.click();
+    await expect(page.getByText(/Nå betjenes|Now serving/).first()).toBeVisible();
+  });
+});

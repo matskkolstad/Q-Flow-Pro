@@ -1,6 +1,66 @@
 # Changelog
 
-## [Unreleased] - Security hardening (phase 0)
+## [Unreleased] - Queue features, statistics, design and operations (phases 1–4)
+
+### Upgrade notes
+- Update with `bash /opt/Q-Flow-Pro/scripts/update.sh` (takes a copy of the database first). Installs from before the systemd layout (data in `/opt/Q-Flow-Pro/data`) run `scripts/install-lxc.sh` once instead; it moves the data to `/var/lib/qflow` and keeps `.env`.
+- Set `TZ` (e.g. `TZ=Europe/Oslo`) in `.env`: opening hours, the nightly reset/backup and statistics use the server's local time.
+- The first start migrates the data automatically: finished tickets are copied into the new statistics table, numbering continues per service and the nightly reset does not run on the first day. Nobody is signed out and kiosks stay activated.
+- The socket API for tickets and admin changes is new (commands with acknowledgements instead of pushing the whole state). Custom clients written against the old events must be updated.
+
+### Queue
+- The server decides everything: “call next” picks the ticket on the server (priority, then waiting time, filtered by the counter's services), so two counters can never call the same ticket.
+- New operator actions: call a specific ticket, call again, complete, did not show up (`NO_SHOW`), back to queue, transfer to another service, cancel; “complete and call next”.
+- Numbering per service (`A001`, `B001` …), wrapping after 999.
+- Wait estimates use the service's estimated time, the tickets ahead in the real call order and the number of online counters.
+- Opening hours per weekday open and close the queue automatically; manual open/close still works until the next scheduled change.
+- Nightly reset (default 04:00) and nightly backup (default 02:30), both configurable.
+- Finished tickets are archived from the live queue after 30 minutes; closed services refuse new tickets while waiting tickets are still served.
+
+### Statistics
+- Every finished ticket is stored in a `ticket_history` table.
+- New *Statistics* page: tickets, completed / no-show / cancelled, average waiting and service time, per service, counter, day and hour of day; date range presets; CSV export (admins).
+
+### Customers and screens
+- Mobile tickets: draw on the phone, follow your own ticket (`/#/ticket/<id>?k=<key>`) with live position and estimate, sound/vibration/notification when it is your turn, cancel with the secret key in the link, survives reloads.
+- Kiosk: shows the number with a QR code to follow it on a phone (optional QR on the printed ticket), returns to the start screen after a configurable time, shows closed services and the next opening time, language toggle, no artificial delay.
+- Public display: next in line in the real call order, recently called, ticking clock, highlight on call, public-address QR code.
+- Sounds are generated in the browser (chime, print, alert) and numbers are read aloud in Norwegian or English with configurable text – no internet needed. Displays show a “tap to enable sound” button.
+- Counter displays: connection indicator, heartbeat, translated labels.
+
+### Design
+- Upload a logo (resized in the browser, served from `/api/branding/logo` with its own CSP) or use a URL. Printed tickets only use an uploaded logo; the server no longer downloads logos from web addresses.
+- Main colour: the whole interface (buttons, highlights, screens) follows it.
+- Brand name, ticket footer, announcement text and public address (for QR codes) in *Settings → Design*.
+- Page title and favicon follow the brand; web app manifest; bundled Inter font (no Google Fonts).
+
+### Admin panel
+- Split into *Overview*, *Statistics*, *Logs* and *Settings* with tabs: General, Design, Services, Counters, Users, Devices, Opening hours & jobs, Backups, Sign-in methods, My account.
+- Create/edit/delete services, counters, users and printers with validation and clear error messages; test print.
+- Backups: create, download, delete, upload and restore (a safety backup is taken first; users stay signed in).
+- Logs: search, filter by type, CSV export.
+- Operators see the overview, statistics, logs and their own account only.
+- The operator's counter choice is remembered per browser.
+
+### Operations
+- `scripts/install-lxc.sh`: one-command install on Debian/Ubuntu (Node 22, `qflow` user, `/var/lib/qflow`, `.env` with a random secret, systemd).
+- `scripts/update.sh`: pull, build, back up the database, update the unit, restart and health check.
+- systemd unit: `/opt/Q-Flow-Pro` + `/var/lib/qflow`, `.env` via `EnvironmentFile`, `StateDirectory`, hardening.
+- Clean shutdown (state saved, database closed), `server.pid`, consistent online backups (SQLite backup API), `BACKUP_KEEP`.
+- The user CLI refuses to change users while the server runs (`--force` to override), supports `--username`, `--must-change` and the password policy, and signs users out after a password or role change.
+- Quieter logs: only API/auth requests and errors are logged.
+
+### Code and tooling
+- Server split into modules: `lib/queue.js`, `lib/queueService.js`, `lib/socketHandlers.js`, `lib/history.js`, `lib/validators.js`.
+- Vite 8, React Router 7; removed unused files (`constants.ts`, `metadata.json`).
+- ESLint (flat config) in CI, CodeQL and Dependabot.
+- More tests: unit tests for queue rules, validation and the queue service; end-to-end tests for concurrent calls, all ticket actions, mobile cancel, admin CRUD, settings, logo, statistics/CSV and backup restore/upload.
+
+### Documentation
+- Rewritten README and INSTALLATION; new Norwegian user guide (`docs/brukerveiledning.md`), `SECURITY.md`, updated CLI, systemd, OAuth and security best-practice guides.
+- Old review/audit reports moved to `docs/archive/`.
+
+## Security hardening (phase 0)
 
 ### Security
 - **Role-filtered state**: clients only receive the data for their role. Public screens (display, kiosk, mobile) no longer receive users, password hashes, session tokens, OAuth client secrets, the kiosk PIN or logs. Operators do not receive users or auth settings. OAuth client secrets are write-only.
@@ -23,6 +83,8 @@
 - CI: Node 22, `npm ci`, production dependency audit, unit tests, health-checked server start, e2e/security/browser tests, Docker build smoke test.
 
 ## Comprehensive Application Review
+
+_The review and audit documents mentioned below now live in [docs/archive](docs/archive/)._
 
 ## [Review Completed] - 2026-02-14
 

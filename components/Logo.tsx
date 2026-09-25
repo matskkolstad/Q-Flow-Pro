@@ -30,14 +30,15 @@ export const Logo: React.FC<LogoProps> = ({
           className={`h-full w-full object-contain rounded-xl shadow-sm bg-white flex-shrink-0 ${className}`}
         />
       ) : (
-        <div className={`bg-indigo-600 rounded-xl p-2 text-white flex items-center justify-center shadow-sm flex-shrink-0 ${className}`}>
+        <div className={`bg-brand-600 rounded-xl p-2 text-white flex items-center justify-center shadow-sm flex-shrink-0 ${className}`}>
           <Layers size={24} />
         </div>
       )}
       {showText && (useDefaultStyle ? (
         <span className={`tracking-tight whitespace-nowrap ${textClass}`}>
           Q-Flow
-          <span className="text-indigo-600">Pro</span>
+          {/* On dark or coloured backgrounds (white text) the accent must stay readable */}
+          <span className={textClass.includes('text-white') ? 'text-brand-200' : 'text-brand-600'}>Pro</span>
         </span>
       ) : (
         <span className={`tracking-tight whitespace-nowrap ${textClass}`}>{effectiveText}</span>

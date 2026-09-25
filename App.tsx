@@ -9,7 +9,7 @@ import Home from './pages/Home';
 import Kiosk from './pages/Kiosk';
 import PublicDisplay from './pages/PublicDisplay';
 import AdminDashboard from './pages/AdminDashboard';
-import MobileClient from './pages/MobileClient';
+import MobileClient, { TicketTracker } from './pages/MobileClient';
 import CounterDisplay from './pages/CounterDisplay';
 import Login from './pages/Login';
 
@@ -48,6 +48,9 @@ const App: React.FC = () => {
                 <Route path="/admin" element={<ProtectedRoute><AdminDashboard /></ProtectedRoute>} />
                 <Route path="mobile/new" element={<MobileClient />} />
                 <Route path="/mobile/new" element={<MobileClient />} />
+                {/* Follow one ticket (link/QR from the kiosk or the phone that drew it) */}
+                <Route path="ticket/:ticketId" element={<TicketTracker />} />
+                <Route path="/ticket/:ticketId" element={<TicketTracker />} />
                 {/* Fallback to home for any unknown hash */}
                 <Route path="*" element={<Home />} />
               </Routes>

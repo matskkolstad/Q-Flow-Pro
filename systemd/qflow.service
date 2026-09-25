@@ -1,21 +1,34 @@
+# Q-Flow Pro systemd unit.
+# Code in /opt/Q-Flow-Pro (owned by root, read-only for the service),
+# data (database, logs, backups) in /var/lib/qflow (owned by the qflow user).
+# scripts/install-lxc.sh installs this unit automatically.
 [Unit]
-Description=Q-Flow queue service
+Description=Q-Flow Pro queue service
 After=network-online.target
 Wants=network-online.target
 
 [Service]
-WorkingDirectory=/opt/qflow
-EnvironmentFile=-/etc/qflow/qflow.env
-Environment=HOST=0.0.0.0
-Environment=PORT=3000
-Environment=NODE_ENV=production
+Type=simple
 User=qflow
 Group=qflow
-ExecStart=/usr/bin/env node server.js
+WorkingDirectory=/opt/Q-Flow-Pro
+Environment=NODE_ENV=production
+Environment=QFLOW_DATA_DIR=/var/lib/qflow
+# Settings (PORT, SESSION_SECRET, TZ, ...). Values here override the lines above.
+EnvironmentFile=-/opt/Q-Flow-Pro/.env
+ExecStart=/usr/bin/node server.js
 Restart=on-failure
 RestartSec=5
+# Creates /var/lib/qflow owned by the service user
+StateDirectory=qflow
 StandardOutput=journal
 StandardError=journal
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/qflow
 
 [Install]
 WantedBy=multi-user.target

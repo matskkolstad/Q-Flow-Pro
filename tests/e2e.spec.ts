@@ -5,12 +5,10 @@ import {
   apiGet,
   apiPost,
   loginAdmin,
-  login,
   connect,
-  addUsers,
   waitForState,
   emitWithAck,
-  uniqueName,
+  connectOperator,
 } from './helpers';
 
 test.describe('Q-Flow happy paths', () => {
@@ -36,7 +34,7 @@ test.describe('Q-Flow happy paths', () => {
     const backupBody = await backupRes.json();
     expect(backupBody.ok).toBe(true);
     // Only the file name is returned, not the server path
-    expect(backupBody.file).toMatch(/^qflow-backup-.*\.db$/);
+    expect(backupBody.file).toMatch(/^qflow-manual-.*\.db$/);
 
     const listRes = await apiGet('/api/admin/backups', token);
     expect(listRes.status).toBe(200);
@@ -49,16 +47,15 @@ test.describe('Q-Flow happy paths', () => {
     expect((await downloadRes.arrayBuffer()).byteLength).toBeGreaterThan(0);
   });
 
-  test('queue flow via sockets (ticket -> serve -> complete) and close toggle', async () => {
+  test('queue flow via sockets (ticket -> call -> complete) and close toggle', async () => {
     const admin = await connect({ token: await loginAdmin() });
-    const operatorName = uniqueName('op');
-    await addUsers(admin, [{ username: operatorName, name: 'Operator', role: 'OPERATOR', password: 'Operator-Pass1' }]);
-    const operator = await connect({ token: (await login(operatorName, 'Operator-Pass1')).token });
+    const operator = await connectOperator(admin);
     expect(operator.session.role).toBe('OPERATOR');
 
     const service = operator.state.services.find((s: any) => s.isOpen !== false);
     expect(service).toBeTruthy();
-    const counter = operator.state.counters.find((c: any) => c.activeServiceIds.includes(service.id)) || operator.state.counters[0];
+    const counter = operator.state.counters.find((c: any) => c.isOnline && (c.activeServiceIds.length === 0 || c.activeServiceIds.includes(service.id)));
+    expect(counter).toBeTruthy();
 
     // A public client (mobile) draws a ticket and gets the exact ticket back
     const mobile = await connect();
@@ -66,26 +63,36 @@ test.describe('Q-Flow happy paths', () => {
     expect(added.ok).toBe(true);
     expect(added.ticket.number.startsWith(service.prefix)).toBe(true);
     expect(added.ticket.status).toBe(TicketStatus.WAITING);
+    expect(typeof added.ownerKey).toBe('string');
     const ticket = added.ticket;
 
-    operator.socket.emit('update-ticket-status', { ticketId: ticket.id, status: TicketStatus.SERVING, counterId: counter.id });
-    const servingState = await waitForState(operator.socket, (s) => s.tickets.some((t: any) => t.id === ticket.id && t.status === TicketStatus.SERVING));
+    // Listen before sending: the broadcast can arrive before the acknowledgement.
+    const servingP = waitForState(operator.socket, (s) => s.tickets.some((t: any) => t.id === ticket.id && t.status === TicketStatus.SERVING));
+    const called = await emitWithAck(operator.socket, 'ticket:call', { ticketId: ticket.id, counterId: counter.id });
+    expect(called.ok).toBe(true);
+    const servingState = await servingP;
     expect(servingState.tickets.find((t: any) => t.id === ticket.id).counterId).toBe(counter.id);
     expect(servingState.counters.find((c: any) => c.id === counter.id).currentTicketId).toBe(ticket.id);
 
-    operator.socket.emit('update-ticket-status', { ticketId: ticket.id, status: TicketStatus.COMPLETED, counterId: counter.id });
-    const completedState = await waitForState(operator.socket, (s) => s.tickets.some((t: any) => t.id === ticket.id && t.status === TicketStatus.COMPLETED));
+    const completedP = waitForState(operator.socket, (s) => s.tickets.some((t: any) => t.id === ticket.id && t.status === TicketStatus.COMPLETED));
+    const completed = await emitWithAck(operator.socket, 'ticket:complete', { counterId: counter.id });
+    expect(completed.ok).toBe(true);
+    const completedState = await completedP;
     expect(completedState.counters.find((c: any) => c.id === counter.id).currentTicketId).toBeUndefined();
+    expect(completedState.todaySummary.completed).toBeGreaterThan(0);
 
-    // Invalid status values are ignored
-    operator.socket.emit('update-ticket-status', { ticketId: ticket.id, status: 'HACKED', counterId: counter.id });
+    // Public clients cannot call tickets
+    expect(await emitWithAck(mobile.socket, 'ticket:call-next', { counterId: counter.id })).toEqual({ ok: false, error: 'unauthorized' });
 
-    admin.socket.emit('update-settings', { isClosed: true });
-    await waitForState(mobile.socket, (s) => s.isClosed === true);
+    // Start listening before sending: the broadcast can arrive before the acknowledgement.
+    const closed = waitForState(mobile.socket, (s) => s.isClosed === true);
+    await emitWithAck(admin.socket, 'update-settings', { isClosed: true });
+    await closed;
     const whileClosed = await emitWithAck(mobile.socket, 'add-ticket', { serviceId: service.id });
     expect(whileClosed).toEqual({ ok: false, error: 'closed' });
-    admin.socket.emit('update-settings', { isClosed: false });
-    const reopened = await waitForState(mobile.socket, (s) => s.isClosed === false);
+    const reopenedP = waitForState(mobile.socket, (s) => s.isClosed === false);
+    await emitWithAck(admin.socket, 'update-settings', { isClosed: false });
+    const reopened = await reopenedP;
     expect(reopened.tickets.find((t: any) => t.id === ticket.id).status).toBe(TicketStatus.COMPLETED);
 
     [admin, operator, mobile].forEach((c) => c.socket.disconnect());

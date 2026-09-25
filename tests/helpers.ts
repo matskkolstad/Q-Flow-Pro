@@ -1,10 +1,11 @@
+import { randomBytes } from 'crypto';
 import { io, Socket } from 'socket.io-client';
 
 export const BASE_URL = process.env.E2E_BASE_URL || 'http://localhost:3000';
 export const ADMIN_USERNAME = process.env.QFLOW_ADMIN_USERNAME || 'admin';
 export const ADMIN_PASSWORD = process.env.QFLOW_ADMIN_PASSWORD || 'CiAdmin123!';
 
-export const uniqueName = (prefix: string) => `${prefix}${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+export const uniqueName = (prefix: string) => `${prefix}${Date.now().toString(36)}${randomBytes(3).toString('hex')}`;
 
 export const apiPost = (path: string, body: unknown, token?: string, headers: Record<string, string> = {}) =>
   fetch(`${BASE_URL}${path}`, {
@@ -78,11 +79,19 @@ export const emitWithAck = <T = any>(socket: Socket, event: string, payload?: un
 
 // Adds users through the admin socket (the same path the admin panel uses).
 export const addUsers = async (admin: Connected, newUsers: Array<Record<string, unknown>>) => {
-  const current = await new Promise<any>((resolve) => {
+  for (const user of newUsers) {
+    const res = await emitWithAck(admin.socket, 'user:save', { user });
+    if (!res.ok) throw new Error(`user:save failed: ${res.error}`);
+  }
+  return new Promise<any>((resolve) => {
     admin.socket.once('init-state', resolve);
     admin.socket.emit('request-state');
   });
-  const usernames = newUsers.map((u) => u.username);
-  admin.socket.emit('update-settings', { users: [...current.users, ...newUsers] });
-  return waitForState(admin.socket, (s) => usernames.every((name) => s.users?.some((u: any) => u.username === name)));
+};
+
+// Creates a new operator account and returns a connected socket for it.
+export const connectOperator = async (admin: Connected) => {
+  const username = uniqueName('op');
+  await addUsers(admin, [{ username, role: 'OPERATOR', password: 'Operator-Pass1' }]);
+  return connect({ token: (await login(username, 'Operator-Pass1')).token });
 };
