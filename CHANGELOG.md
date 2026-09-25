@@ -1,4 +1,28 @@
-# Changelog - Comprehensive Application Review
+# Changelog
+
+## [Unreleased] - Security hardening (phase 0)
+
+### Security
+- **Role-filtered state**: clients only receive the data for their role. Public screens (display, kiosk, mobile) no longer receive users, password hashes, session tokens, OAuth client secrets, the kiosk PIN or logs. Operators do not receive users or auth settings. OAuth client secrets are write-only.
+- **Sessions**: tokens are 256-bit and only their SHA-256 hash is stored. Sessions without expiry are rejected. `db.json` (which contained admin session tokens) is removed from the repository. The first start after upgrading signs everyone out once.
+- **No default passwords**: a fresh install creates one admin from `QFLOW_ADMIN_PASSWORD`, or a generated password printed once to the log. Legacy plaintext `pinCode`s are hashed and removed; accounts still using a default password must change it.
+- **Google/OIDC users** no longer get a guessable local password (previously the username/e-mail or `Changeme1`); existing ones are cleaned up on upgrade.
+- **Forced password change is enforced by the server** (REST and socket), not only in the browser. Changing a password signs out the user's other sessions; removing/demoting a user signs them out.
+- **`/api/print-ticket`** requires an admin session or API key and only prints on configured printers (no more arbitrary IP/port or logo URL: SSRF). Kiosk printing happens in-process, only for activated kiosk devices. ePOS XML is escaped.
+- **Client IP**: `X-Forwarded-For` is only trusted from configured proxies (`TRUST_PROXY`, default: localhost/private networks). Login lockout is per ip+username plus per ip and only counts failures.
+- **OAuth/OIDC**: the session token is no longer put in the redirect URL (single-use code in the URL fragment instead, exchanged via `/api/auth/exchange`); this also fixes OAuth logins with the hash router. Google uses the OAuth `state` parameter, OIDC uses PKCE. Accounts are only linked/provisioned by e-mail when the provider verified it (configurable for OIDC).
+- **Logs**: request logs contain the path only (no query strings) and log events are only sent to staff.
+- **Abuse protection** for unauthenticated sockets: per-socket event budget, ticket rate limits (per socket and per ip), a cap on waiting tickets (`MAX_WAITING_TICKETS`), validation of all socket payloads, and no disk writes on display heartbeats.
+- **Kiosk devices**: an admin activates a kiosk from the kiosk page; the kiosk gets its own device token and the admin session is removed from the device. The exit PIN is hashed and verified by the server (rate limited). Removing a kiosk in the admin panel deactivates the device.
+- **Dependencies**: fixed high-severity advisories (socket.io-parser, ws, sharp, qs/express). Node 22 in Docker and CI.
+
+### Changed
+- Docker Compose stores data in `./data` (mounted at `/app/data`). See README for upgrading.
+- `QFLOW_DATA_DIR` sets where the database, logs and backups are stored.
+- Backup API returns file names only (no server paths).
+- CI: Node 22, `npm ci`, production dependency audit, unit tests, health-checked server start, e2e/security/browser tests, Docker build smoke test.
+
+## Comprehensive Application Review
 
 ## [Review Completed] - 2026-02-14
 

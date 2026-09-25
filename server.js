@@ -1,18 +1,30 @@
 import express from 'express';
 import session from 'express-session';
 import passport from 'passport';
+import proxyaddr from 'proxy-addr';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import net from 'net';
 import crypto from 'crypto';
-import bcrypt from 'bcryptjs';
 import fs from 'fs';
 import helmet from 'helmet';
-import sharp from 'sharp';
-import { loadState as loadStateFromStore, saveState as saveStateToStore, backupDatabase, listBackups } from './lib/stateStore.js';
-import { initializePassport, isGoogleConfigured, isOIDCConfigured } from './lib/passportConfig.js';
+import { loadState as loadStateFromStore, saveState as saveStateToStore, backupDatabase, listBackups, getDataDir } from './lib/stateStore.js';
+import { initializePassport, isGoogleConfigured, isOIDCConfigured, AUTH_ERRORS } from './lib/passportConfig.js';
+import {
+  parseTrustProxy,
+  normalizeClientIp,
+  hashToken,
+  generateToken,
+  safeEqual,
+  isValidPrinterHost,
+  isValidPort,
+  createRateLimiter,
+} from './lib/security.js';
+import { hashPassword, verifyPassword, passwordPolicy, migrateUsers, generatePassword } from './lib/users.js';
+import { viewForRole } from './lib/stateViews.js';
+import { printTicket } from './lib/printer.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -36,11 +48,14 @@ const ALLOWED_API_IPS = (() => {
   if (!env) return [];
   return env.split(',').map(ip => ip.trim()).filter(Boolean);
 })();
-const API_KEY_REQUIRED = API_KEYS.length > 0;
+
+// Which proxies may set X-Forwarded-For. See .env.example (TRUST_PROXY).
+const TRUST_PROXY = parseTrustProxy(process.env.TRUST_PROXY);
 
 const app = express();
-app.set('trust proxy', 1);
-app.use(express.json({ limit: '10mb' }));
+app.set('trust proxy', TRUST_PROXY);
+const trustProxyFn = app.get('trust proxy fn');
+app.use(express.json({ limit: '1mb' }));
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
   cors: {
@@ -75,24 +90,28 @@ app.use(helmet({
   hidePoweredBy: true,
 }));
 
-// Session configuration for OAuth
-// Generate persistent session secret (should be set in production via SESSION_SECRET env var)
+// The cookie session is only used to carry OAuth/OIDC state between the redirect and the callback.
+// API and socket authentication use bearer tokens.
 const SESSION_SECRET = process.env.SESSION_SECRET || (() => {
   const generated = crypto.randomBytes(32).toString('hex');
   console.warn('⚠️  WARNING: SESSION_SECRET not set in environment. Using generated secret.');
-  console.warn('⚠️  All sessions will be invalidated on server restart.');
+  console.warn('⚠️  OAuth logins that are in progress during a restart will fail.');
   console.warn('⚠️  Set SESSION_SECRET in .env for production use.');
   return generated;
 })();
 
 app.use(session({
+  name: 'qflow.sid',
   secret: SESSION_SECRET,
   resave: false,
   saveUninitialized: false,
   cookie: {
-    secure: process.env.NODE_ENV === 'production',
+    // 'auto' marks the cookie Secure when the request arrived over HTTPS (directly or via a trusted proxy),
+    // so plain-HTTP LAN installs keep working.
+    secure: 'auto',
     httpOnly: true,
-    maxAge: 24 * 60 * 60 * 1000 // 24 hours
+    sameSite: 'lax',
+    maxAge: 15 * 60 * 1000,
   }
 }));
 
@@ -104,7 +123,6 @@ io.engine.on('connection_error', (err) => {
   addLog(`Socket handshake feilet: ${err?.code || err?.message || 'ukjent'} (${err?.context || ''})`, 'ALERT');
 });
 
-// Database file path
 const saveState = () => saveStateToStore(state);
 
 // Initial State defaults
@@ -120,15 +138,15 @@ const DEFAULT_STATE = {
     { id: 'c3', name: 'VIP Skranke', activeServiceIds: ['s2'], isOnline: false },
   ],
   isClosed: false,
-  users: [
-    { id: 'u1', name: 'Admin Bruker', username: 'admin', role: 'ADMIN', passwordHash: '' },
-    { id: 'u2', name: 'Operatør Kari', username: 'operator', role: 'OPERATOR', passwordHash: '' },
-  ],
+  // The first admin is created on first boot (see bootstrapAdmin below).
+  users: [],
   tickets: [],
   printers: [],
   kiosks: [],
   kioskPrinterAssignments: {},
   counterDisplays: [],
+  devices: {},
+  sessions: {},
   soundSettings: {
     kioskEffects: true,
     adminEffects: true,
@@ -139,7 +157,7 @@ const DEFAULT_STATE = {
     brandText: 'Q-Flow Pro',
     brandLogoUrl: ''
   },
-  kioskExitPin: '1234',
+  kioskExitPinHash: '',
   logs: [],
   publicMessage: "",
   authProviders: {
@@ -157,91 +175,76 @@ const DEFAULT_STATE = {
       clientId: process.env.OIDC_CLIENT_ID || '',
       clientSecret: process.env.OIDC_CLIENT_SECRET || '',
       autoProvision: false,
-      defaultRole: 'OPERATOR'
+      defaultRole: 'OPERATOR',
+      requireVerifiedEmail: true
     }
   }
 };
 
 const SESSION_TTL_MS = Number(process.env.SESSION_TTL_HOURS || 12) * 60 * 60 * 1000;
-const BCRYPT_ROUNDS = 10;
 const LOG_LIMIT = 500;
-const MIN_PASSWORD_LENGTH = 8;
-const PASSWORD_REQUIREMENTS = /^(?=.*[A-Z])(?=.*[a-z])(?=.*\d).+$/;
-const LOG_DIR = join(__dirname, 'data', 'logs');
+const DATA_DIR = getDataDir();
+const LOG_DIR = join(DATA_DIR, 'logs');
 const LOG_RETENTION_DAYS = Number(process.env.LOG_RETENTION_DAYS || 14);
-const BACKUP_DIR = join(__dirname, 'data', 'backups');
+const BACKUP_DIR = join(DATA_DIR, 'backups');
 const BACKUP_RETENTION_DAYS = Number(process.env.BACKUP_RETENTION_DAYS || 30);
 const SLOW_REQUEST_MS = 1200;
 const WAITING_ALERT_THRESHOLD = 50;
 const WAITING_ALERT_INTERVAL_MS = 5 * 60 * 1000;
-const DEFAULT_ADMIN_USERNAME = 'admin';
-const DEFAULT_OPERATOR_USERNAME = 'operator';
+const MAX_WAITING_TICKETS = Number(process.env.MAX_WAITING_TICKETS || 500);
+const MAX_KIOSKS = 100;
+const MAX_COUNTER_DISPLAYS = 200;
+const OAUTH_CODE_TTL_MS = 60 * 1000;
+// Bumped when a release needs a one-time migration of security-relevant data.
+const SECURITY_VERSION = 1;
 let lastQueueAlertAt = 0;
-const isSha256 = (hash = '') => /^[a-f0-9]{64}$/i.test(hash);
-const hashPassword = (pw = '') => bcrypt.hashSync(pw, BCRYPT_ROUNDS);
-const verifyPassword = (pw = '', stored = '') => {
-  if (!stored) return false;
-  if (stored.startsWith('$2')) return bcrypt.compareSync(pw, stored);
-  if (isSha256(stored)) {
-    const sha = crypto.createHash('sha256').update(pw).digest('hex');
-    return sha === stored;
-  }
-  const fallback = crypto.createHash('sha256').update(pw).digest('hex');
-  return fallback === stored;
-};
-
-const passwordPolicy = (pw = '') => {
-  if (!pw || pw.length < MIN_PASSWORD_LENGTH) return { ok: false, error: 'password_too_short' };
-  if (!PASSWORD_REQUIREMENTS.test(pw)) return { ok: false, error: 'password_needs_upper_lower_digit' };
-  return { ok: true };
-};
 
 const cleanText = (val = '', max = 80) => {
   if (typeof val !== 'string') return '';
   return val.replace(/\s+/g, ' ').trim().slice(0, max);
 };
 
-const loginAttempts = new Map(); // ip -> timestamps
-const MAX_LOGIN_ATTEMPTS = 10;
-const LOGIN_WINDOW_MS = 15 * 60 * 1000;
-const registerLoginAttempt = (ip) => {
-  const now = Date.now();
-  const list = loginAttempts.get(ip) || [];
-  const recent = list.filter((t) => now - t < LOGIN_WINDOW_MS);
-  recent.push(now);
-  loginAttempts.set(ip, recent);
-  return recent.length;
-};
-const isLoginBlocked = (ip) => {
-  const now = Date.now();
-  const list = loginAttempts.get(ip) || [];
-  const recent = list.filter((t) => now - t < LOGIN_WINDOW_MS);
-  loginAttempts.set(ip, recent);
-  return recent.length >= MAX_LOGIN_ATTEMPTS;
-};
+const isSafeId = (val) => typeof val === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(val);
+const randomId = () => crypto.randomBytes(6).toString('hex');
+
+// --- Rate limiting ---
+
+// Failed logins per ip+username and per ip (password spraying).
+const loginFailuresByUser = createRateLimiter({ limit: 10, windowMs: 15 * 60 * 1000 });
+const loginFailuresByIp = createRateLimiter({ limit: 50, windowMs: 15 * 60 * 1000 });
+// Tickets drawn by anonymous clients (mobile), per socket and per ip.
+const publicTicketsBySocket = createRateLimiter({ limit: 5, windowMs: 60 * 1000 });
+const publicTicketsByIp = createRateLimiter({ limit: 60, windowMs: 60 * 1000 });
+// Any event from an unauthenticated or kiosk socket.
+const socketEvents = createRateLimiter({ limit: 40, windowMs: 10 * 1000 });
+const kioskPinAttempts = createRateLimiter({ limit: 5, windowMs: 5 * 60 * 1000 });
+// New counter displays per ip (displays behind one proxy share an ip; MAX_COUNTER_DISPLAYS caps the total).
+const counterDisplayRegistrations = createRateLimiter({ limit: 60, windowMs: 60 * 60 * 1000 });
+
+const loginKey = (ip, username) => `${ip}|${String(username || '').toLowerCase()}`;
 
 // General API rate limiting
 const apiRateLimits = new Map(); // ip -> { timestamps: [], blocked: false, blockExpiry: 0 }
-const MAX_API_REQUESTS = 100; // Max requests per window
+const MAX_API_REQUESTS = Number(process.env.API_RATE_LIMIT_PER_MINUTE || 100); // Max requests per window
 const API_RATE_WINDOW_MS = 60 * 1000; // 1 minute window
 const API_BLOCK_DURATION_MS = 5 * 60 * 1000; // 5 minute block
 const checkApiRateLimit = (ip) => {
   const now = Date.now();
   let entry = apiRateLimits.get(ip) || { timestamps: [], blocked: false, blockExpiry: 0 };
-  
+
   // Check if currently blocked
   if (entry.blocked && entry.blockExpiry > now) {
     return { allowed: false, remaining: 0, blockExpiry: entry.blockExpiry };
   }
-  
+
   // Unblock if block period expired
   if (entry.blocked && entry.blockExpiry <= now) {
     entry = { timestamps: [], blocked: false, blockExpiry: 0 };
   }
-  
+
   // Clean old timestamps
   const recent = entry.timestamps.filter((t) => now - t < API_RATE_WINDOW_MS);
-  
+
   // Check if limit exceeded
   if (recent.length >= MAX_API_REQUESTS) {
     entry.blocked = true;
@@ -250,40 +253,25 @@ const checkApiRateLimit = (ip) => {
     apiRateLimits.set(ip, entry);
     return { allowed: false, remaining: 0, blockExpiry: entry.blockExpiry };
   }
-  
+
   // Add current request
   recent.push(now);
   entry.timestamps = recent;
   apiRateLimits.set(ip, entry);
-  
+
   return { allowed: true, remaining: MAX_API_REQUESTS - recent.length };
 };
 
-const IPV6_MAPPED_IPV4_PREFIX = '::ffff:';
+// Client address as resolved by Express using the TRUST_PROXY setting.
+// X-Forwarded-For is only honoured when the direct peer is a trusted proxy.
+const getClientIp = (req) => normalizeClientIp(req.ip || req.socket?.remoteAddress || '') || 'unknown';
 
-const normalizeClientIp = (raw) => {
-  if (typeof raw !== 'string') return '';
-  let candidate = raw.split(',')[0].trim();
-  if (!candidate) return '';
-  if (candidate === '::1') return '127.0.0.1';
-  if (candidate.startsWith(IPV6_MAPPED_IPV4_PREFIX)) {
-    candidate = candidate.slice(IPV6_MAPPED_IPV4_PREFIX.length);
+const getSocketIp = (socket) => {
+  try {
+    return normalizeClientIp(proxyaddr(socket.request, trustProxyFn)) || 'unknown';
+  } catch {
+    return normalizeClientIp(socket.handshake?.address || '') || 'unknown';
   }
-  if (/^\d{1,3}(?:\.\d{1,3}){3}:\d+$/.test(candidate)) {
-    candidate = candidate.split(':')[0];
-  }
-  if (candidate.startsWith('[')) {
-    const closing = candidate.indexOf(']');
-    if (closing > 0) candidate = candidate.slice(1, closing);
-  }
-  return candidate;
-};
-
-const getClientIp = (req) => {
-  const forwarded = req.headers?.['x-forwarded-for'];
-  const raw = Array.isArray(forwarded) ? forwarded[0] : (forwarded || req.ip || '');
-  const normalized = normalizeClientIp(raw);
-  return normalized || 'unknown';
 };
 
 const isIPv4 = (ip) => /^\d{1,3}(?:\.\d{1,3}){3}$/.test(ip);
@@ -292,43 +280,51 @@ const isIPv4 = (ip) => /^\d{1,3}(?:\.\d{1,3}){3}$/.test(ip);
 const apiRateLimiter = (req, res, next) => {
   // Skip rate limiting for health endpoint
   if (req.path === '/health') return next();
-  
+
   // Apply rate limiting to API endpoints only
   if (!req.path.startsWith('/api/')) return next();
-  
+
   const ip = getClientIp(req);
   const check = checkApiRateLimit(ip);
-  
+
   // Set rate limit headers
   res.setHeader('X-RateLimit-Limit', MAX_API_REQUESTS.toString());
   res.setHeader('X-RateLimit-Remaining', check.remaining.toString());
   res.setHeader('X-RateLimit-Reset', new Date(Date.now() + API_RATE_WINDOW_MS).toISOString());
-  
+
   if (!check.allowed) {
     const resetTime = new Date(check.blockExpiry).toISOString();
     res.setHeader('Retry-After', Math.ceil((check.blockExpiry - Date.now()) / 1000).toString());
     addLog(`API rate limit exceeded for ${ip}, blocked until ${resetTime}`, 'ALERT');
-    return res.status(429).json({ 
-      error: 'rate_limit_exceeded', 
+    return res.status(429).json({
+      error: 'rate_limit_exceeded',
       message: 'Too many requests. Please try again later.',
       retryAfter: resetTime
     });
   }
-  
+
   next();
+};
+
+const ipToInt = (ip) => {
+  if (!ip || typeof ip !== 'string') return 0;
+  const parts = ip.split('.');
+  if (parts.length !== 4) return 0;
+  const nums = parts.map((octet) => Number(octet));
+  if (nums.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return 0;
+  return nums.reduce((acc, octet) => (acc << 8) + octet, 0) >>> 0;
 };
 
 // IP whitelist validation (supports CIDR notation)
 const isIPAllowed = (ip) => {
   if (ALLOWED_API_IPS.length === 0) return true; // No whitelist = allow all
-  
-  // Simple IP matching (exact match or CIDR prefix)
+
   const normalizedIp = normalizeClientIp(ip);
   if (!normalizedIp) return false;
   for (const allowed of ALLOWED_API_IPS) {
     const normalizedAllowed = normalizeClientIp(allowed);
     if (normalizedAllowed === normalizedIp) return true;
-    
+
     // Basic CIDR support (e.g., 192.168.1.0/24)
     if (allowed.includes('/') && isIPv4(normalizedIp)) {
       const [network, bitsRaw] = allowed.split('/');
@@ -344,26 +340,11 @@ const isIPAllowed = (ip) => {
   return false;
 };
 
-const ipToInt = (ip) => {
-  if (!ip || typeof ip !== 'string') return 0;
-  const parts = ip.split('.');
-  if (parts.length !== 4) return 0;
-  const nums = parts.map((octet) => Number(octet));
-  if (nums.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return 0;
-  return nums.reduce((acc, octet) => (acc << 8) + octet, 0) >>> 0;
-};
-
-// Middleware: Validate API key
-const requireApiKey = (req, res, next) => {
-  if (!API_KEY_REQUIRED) return next(); // No API keys configured = skip validation
-  
-  const apiKey = req.headers['x-api-key'] || req.query.apiKey;
-  if (!apiKey || !API_KEYS.includes(apiKey)) {
-    const ip = getClientIp(req);
-    addLog(`API access denied: invalid or missing API key from ${ip}`, 'ALERT');
-    return res.status(401).json({ error: 'invalid_api_key' });
-  }
-  next();
+const hasValidApiKey = (req) => {
+  if (API_KEYS.length === 0) return false;
+  const apiKey = req.headers['x-api-key'];
+  if (typeof apiKey !== 'string' || !apiKey) return false;
+  return API_KEYS.some((k) => safeEqual(k, apiKey));
 };
 
 // Middleware: Validate IP whitelist
@@ -376,162 +357,298 @@ const requireAllowedIP = (req, res, next) => {
   next();
 };
 
-// Load state from SQLite (migrates legacy db.json if present)
-let state = loadStateFromStore(DEFAULT_STATE);
-state = { ...DEFAULT_STATE, ...state };
-saveState();
+// --- Logging ---
+// Declared before state loading so migrations can log. Log events only go to staff clients.
+const ROOMS = { PUBLIC: 'view:public', OPERATOR: 'view:operator', ADMIN: 'view:admin' };
+let state = null;
 
-// Ensure kiosk printer assignments survive restarts by seeding map from kiosks
-if (!state.kioskPrinterAssignments) {
-  state.kioskPrinterAssignments = {};
-}
-if (!state.counterDisplays) {
-  state.counterDisplays = [];
-}
-if (state.isClosed === undefined) {
-  state.isClosed = false;
-}
-if (!state.branding) {
-  state.branding = { brandText: 'Q-Flow Pro', brandLogoUrl: '' };
-}
-if (!Object.prototype.hasOwnProperty.call(state, 'kioskExitPin')) {
-  state.kioskExitPin = '1234';
-}
-
-if (!state.sessions) state.sessions = {};
-
-// Drop expired sessions on boot
-Object.entries(state.sessions).forEach(([token, sess]) => {
-  if (sess.expiresAt && sess.expiresAt < Date.now()) {
-    delete state.sessions[token];
-  }
-});
-
-// Ensure users have username and passwordHash (rehash legacy sha256 with bcrypt on startup)
-let forcedFlagChange = false;
-state.users = (state.users || []).map((u, idx) => {
-  const username = u.username || `user${idx + 1}`;
-  let passwordHash = u.passwordHash;
-  const isDefaultUser = (username === DEFAULT_ADMIN_USERNAME || username === DEFAULT_OPERATOR_USERNAME);
-
-  if (!passwordHash || passwordHash.length === 0) {
-    passwordHash = hashPassword(u.pinCode || username);
-  } else if (!passwordHash.startsWith('$2') && isSha256(passwordHash)) {
-    // Keep sha256 for now; will upgrade on successful login
-  }
-
-  const defaults = [u.pinCode, username].filter(Boolean);
-  const usingDefaultPassword = defaults.some((pw) => verifyPassword(pw, passwordHash));
-
-  let mustChangePassword = u.mustChangePassword !== undefined ? u.mustChangePassword : false;
-  // Default users must change password only while they still use the default credential
-  if (isDefaultUser && usingDefaultPassword) {
-    mustChangePassword = true;
-  }
-
-  if (mustChangePassword !== (u.mustChangePassword || false)) {
-    forcedFlagChange = true;
-  }
-
-  return { ...u, username, passwordHash, mustChangePassword };
-});
-
-// Persist updated flags for default users
-if (forcedFlagChange) {
-  saveState();
-}
-
-// Ensure authProviders exists with defaults
-if (!state.authProviders) {
-  state.authProviders = {
-    google: {
-      enabled: false,
-      clientId: process.env.GOOGLE_CLIENT_ID || '',
-      clientSecret: process.env.GOOGLE_CLIENT_SECRET || '',
-      allowedDomains: [],
-      autoProvision: false,
-      defaultRole: 'OPERATOR'
-    },
-    oidc: {
-      enabled: false,
-      issuerUrl: process.env.OIDC_ISSUER_URL || '',
-      clientId: process.env.OIDC_CLIENT_ID || '',
-      clientSecret: process.env.OIDC_CLIENT_SECRET || '',
-      autoProvision: false,
-      defaultRole: 'OPERATOR'
-    }
-  };
-  saveState();
-}
-
-const getSession = (token) => {
-  if (!token || !state.sessions) return null;
-  const session = state.sessions[token];
-  if (!session) return null;
-  if (session.expiresAt && session.expiresAt < Date.now()) {
-    delete state.sessions[token];
-    saveState();
-    return null;
-  }
-  const user = (state.users || []).find(u => u.id === session.userId);
-  if (!user) return null;
-  return { user, token, role: user.role };
-};
-
-const createSession = (userId) => {
-  const token = crypto.randomBytes(16).toString('hex');
-  state.sessions[token] = { userId, createdAt: Date.now(), expiresAt: Date.now() + SESSION_TTL_MS };
-  saveState();
-  return token;
-};
-
-// Forward declaration of addLog (full implementation later after routes)
-let addLog = (message, type = 'INFO') => {
+const addLog = (message, type = 'INFO') => {
   const log = {
-    id: Math.random().toString(36).slice(2, 11),
+    id: crypto.randomBytes(5).toString('hex'),
     timestamp: Date.now(),
     message,
     type
   };
-  state.logs = [log, ...state.logs].slice(0, LOG_LIMIT);
+  if (state) state.logs = [log, ...(state.logs || [])].slice(0, LOG_LIMIT);
   try {
     console.log(JSON.stringify({ level: type, msg: message, ts: log.timestamp }));
     fs.mkdirSync(LOG_DIR, { recursive: true });
     const day = new Date(log.timestamp).toISOString().slice(0, 10);
     fs.appendFileSync(join(LOG_DIR, `app-${day}.log`), JSON.stringify({ level: type, msg: message, ts: log.timestamp }) + '\n');
-    // io.emit will be available when this is called (after server setup)
-    if (io) io.emit('log-event', log);
+    io.to([ROOMS.OPERATOR, ROOMS.ADMIN]).emit('log-event', log);
   } catch (e) {
     // fallback noop
   }
   return log;
 };
 
-// Initialize Passport strategies after createSession and addLog are defined
-initializePassport(state, createSession, addLog);
+// --- Load and migrate state ---
 
-const requireRole = (socket, roles = []) => {
-  if (socket.data?.token) {
-    const session = getSession(socket.data.token);
-    if (!session) {
-      socket.data.authRole = 'PUBLIC';
-    } else {
-      socket.data.authRole = session.role;
-      socket.data.userId = session.user.id;
-    }
+state = loadStateFromStore(DEFAULT_STATE);
+state = { ...DEFAULT_STATE, ...state };
+
+if (!state.kioskPrinterAssignments) state.kioskPrinterAssignments = {};
+if (!state.counterDisplays) state.counterDisplays = [];
+if (!state.kiosks) state.kiosks = [];
+if (!state.printers) state.printers = [];
+if (!state.tickets) state.tickets = [];
+if (!state.logs) state.logs = [];
+if (state.isClosed === undefined) state.isClosed = false;
+if (!state.branding) state.branding = { brandText: 'Q-Flow Pro', brandLogoUrl: '' };
+if (!state.sessions || typeof state.sessions !== 'object') state.sessions = {};
+if (!state.devices || typeof state.devices !== 'object') state.devices = {};
+if (!state.authProviders) state.authProviders = DEFAULT_STATE.authProviders;
+if (state.authProviders.oidc && state.authProviders.oidc.requireVerifiedEmail === undefined) {
+  state.authProviders.oidc.requireVerifiedEmail = true;
+}
+
+if ((state.securityVersion || 0) < SECURITY_VERSION) {
+  // Earlier versions broadcast the whole state (including session tokens and password hashes)
+  // to every connected client, and shipped a db.json with long-lived admin sessions.
+  // Treat every existing session as compromised and clean up credentials derived from it.
+  const { users } = migrateUsers(state.users, { checkPasswords: true });
+  state.users = users;
+  const hadSessions = Object.keys(state.sessions).length;
+  state.sessions = {};
+  state.devices = {};
+  if (typeof state.kioskExitPin === 'string' && state.kioskExitPin) {
+    state.kioskExitPinHash = hashPassword(state.kioskExitPin);
   }
-  if (roles.includes(socket.data.authRole)) return true;
-  socket.emit('action-denied', { error: 'unauthorized' });
-  return false;
+  state.securityVersion = SECURITY_VERSION;
+  addLog(`Sikkerhetsmigrering ${SECURITY_VERSION} fullført: ${hadSessions} gamle innlogginger ugyldiggjort`, 'ALERT');
+} else {
+  state.users = migrateUsers(state.users, { checkPasswords: false }).users;
+}
+delete state.kioskExitPin;
+if (typeof state.kioskExitPinHash !== 'string') state.kioskExitPinHash = '';
+
+// Drop sessions that are expired or have no expiry (legacy sessions never expired).
+Object.entries(state.sessions).forEach(([key, sess]) => {
+  if (!sess?.expiresAt || sess.expiresAt < Date.now()) delete state.sessions[key];
+});
+
+// Create the first admin on a fresh install. The password comes from QFLOW_ADMIN_PASSWORD,
+// or is generated and printed once to the console (docker logs / journalctl).
+const bootstrapAdmin = () => {
+  if ((state.users || []).some((u) => u.role === 'ADMIN')) return;
+  const envPassword = process.env.QFLOW_ADMIN_PASSWORD;
+  let password = envPassword;
+  let generated = false;
+  if (password && !passwordPolicy(password).ok) {
+    console.warn('⚠️  QFLOW_ADMIN_PASSWORD does not meet the password policy (min. 8 chars, upper, lower, digit). Generating one instead.');
+    password = undefined;
+  }
+  if (!password) {
+    password = generatePassword();
+    generated = true;
+  }
+  let username = cleanText(process.env.QFLOW_ADMIN_USERNAME || 'admin', 64) || 'admin';
+  if (state.users.some((u) => u.username === username)) username = `admin_${randomId()}`;
+  state.users.push({
+    id: `u_${randomId()}`,
+    name: 'Administrator',
+    username,
+    role: 'ADMIN',
+    provider: 'local',
+    passwordHash: hashPassword(password),
+    mustChangePassword: generated,
+  });
+  addLog(`Opprettet første administrator "${username}"`, 'ALERT');
+  if (generated) {
+    console.log('\n==================================================================');
+    console.log(' Q-Flow Pro: first admin account created');
+    console.log(`   username: ${username}`);
+    console.log(`   password: ${password}`);
+    console.log(' You will be asked to change this password after the first login.');
+    console.log('==================================================================\n');
+  }
 };
+bootstrapAdmin();
+
+// Ensure kiosk printer assignments survive restarts by seeding map from kiosks
 state.kiosks.forEach(k => {
   if (k.assignedPrinterId && !state.kioskPrinterAssignments[k.id]) {
     state.kioskPrinterAssignments[k.id] = k.assignedPrinterId;
   }
 });
 
-// Persist any newly added default keys (like kioskPrinterAssignments) immediately
 saveState();
+
+// --- Sessions & devices (only SHA-256 hashes of tokens are stored) ---
+
+const getSession = (token) => {
+  if (!token || typeof token !== 'string') return null;
+  const key = hashToken(token);
+  const sess = state.sessions[key];
+  if (!sess) return null;
+  if (!sess.expiresAt || sess.expiresAt < Date.now()) {
+    delete state.sessions[key];
+    saveState();
+    return null;
+  }
+  const user = (state.users || []).find(u => u.id === sess.userId);
+  if (!user) return null;
+  return { user, key, role: user.role };
+};
+
+const createSession = (userId) => {
+  const token = generateToken(32);
+  state.sessions[hashToken(token)] = { userId, createdAt: Date.now(), expiresAt: Date.now() + SESSION_TTL_MS };
+  saveState();
+  return token;
+};
+
+const deleteUserSessions = (userId, exceptKey = null) => {
+  let removed = 0;
+  Object.entries(state.sessions).forEach(([key, sess]) => {
+    if (sess.userId === userId && key !== exceptKey) {
+      delete state.sessions[key];
+      removed += 1;
+    }
+  });
+  return removed;
+};
+
+const getDevice = (token) => {
+  if (!token || typeof token !== 'string') return null;
+  const key = hashToken(token);
+  const device = state.devices[key];
+  return device ? { ...device, key } : null;
+};
+
+const revokeKioskDevices = (kioskId) => {
+  let removed = 0;
+  Object.entries(state.devices).forEach(([key, device]) => {
+    if (device.kioskId === kioskId) {
+      delete state.devices[key];
+      removed += 1;
+    }
+  });
+  return removed;
+};
+
+// Short-lived, single-use codes handed to the browser after OAuth/OIDC login.
+// The session token itself is never put in a URL.
+const oauthCodes = new Map(); // code -> { userId, expiresAt }
+const issueLoginCode = (userId) => {
+  const code = generateToken(24);
+  oauthCodes.set(code, { userId, expiresAt: Date.now() + OAUTH_CODE_TTL_MS });
+  return code;
+};
+
+// Initialize Passport strategies after createSession and addLog are defined
+initializePassport(state, createSession, addLog);
+
+// --- State broadcasting (role-filtered) ---
+
+const viewRoleForSocket = (socket) => {
+  if (socket.data.viewRoom === ROOMS.ADMIN) return 'ADMIN';
+  if (socket.data.viewRoom === ROOMS.OPERATOR) return 'OPERATOR';
+  return 'PUBLIC';
+};
+
+const sendState = (socket, event = 'init-state') => {
+  socket.emit(event, viewForRole(state, viewRoleForSocket(socket)));
+};
+
+const broadcastState = () => {
+  io.to(ROOMS.PUBLIC).emit('state-update', viewForRole(state, 'PUBLIC'));
+  io.to(ROOMS.OPERATOR).emit('state-update', viewForRole(state, 'OPERATOR'));
+  io.to(ROOMS.ADMIN).emit('state-update', viewForRole(state, 'ADMIN'));
+};
+
+// For changes that only staff can see (device heartbeats, printer status).
+const broadcastStaffState = () => {
+  io.to(ROOMS.OPERATOR).emit('state-update', viewForRole(state, 'OPERATOR'));
+  io.to(ROOMS.ADMIN).emit('state-update', viewForRole(state, 'ADMIN'));
+};
+
+// Re-evaluates who a socket belongs to (session/device may have changed or expired)
+// and moves it to the matching broadcast room. Returns true when anything changed.
+const applySocketAuth = (socket) => {
+  const sess = getSession(socket.data.token);
+  const device = getDevice(socket.data.deviceToken);
+  const before = `${socket.data.authRole}|${socket.data.viewRoom}|${socket.data.kioskId}|${socket.data.mustChangePassword}`;
+
+  let role = 'PUBLIC';
+  if (sess) role = sess.role;
+  else if (device) role = 'KIOSK';
+  const mustChangePassword = !!sess?.user.mustChangePassword;
+
+  socket.data.authRole = role;
+  socket.data.userId = sess?.user.id;
+  socket.data.sessionKey = sess?.key;
+  socket.data.kioskId = device?.kioskId || null;
+  socket.data.mustChangePassword = mustChangePassword;
+
+  let room = ROOMS.PUBLIC;
+  if (!mustChangePassword && role === 'ADMIN') room = ROOMS.ADMIN;
+  else if (!mustChangePassword && role === 'OPERATOR') room = ROOMS.OPERATOR;
+  if (socket.data.viewRoom !== room) {
+    if (socket.data.viewRoom) socket.leave(socket.data.viewRoom);
+    socket.join(room);
+    socket.data.viewRoom = room;
+  }
+
+  const after = `${socket.data.authRole}|${socket.data.viewRoom}|${socket.data.kioskId}|${socket.data.mustChangePassword}`;
+  return before !== after;
+};
+
+const sessionInfo = (socket) => ({
+  role: socket.data.authRole,
+  kioskId: socket.data.kioskId,
+  mustChangePassword: !!socket.data.mustChangePassword,
+});
+
+const refreshSocket = (socket) => {
+  if (applySocketAuth(socket)) {
+    socket.emit('session-info', sessionInfo(socket));
+    sendState(socket, 'state-update');
+  }
+};
+
+const refreshAllSockets = () => {
+  io.sockets.sockets.forEach((socket) => refreshSocket(socket));
+};
+
+const requireRole = (socket, roles = []) => {
+  refreshSocket(socket);
+  if (socket.data.mustChangePassword) {
+    socket.emit('action-denied', { error: 'password_change_required' });
+    return false;
+  }
+  if (roles.includes(socket.data.authRole)) return true;
+  socket.emit('action-denied', { error: 'unauthorized' });
+  return false;
+};
+
+// --- HTTP authentication helpers ---
+
+const bearerToken = (req) => {
+  const auth = req.headers.authorization || '';
+  return auth.startsWith('Bearer ') ? auth.slice(7).trim() : null;
+};
+
+// Express middleware: requires a valid session; optionally restricted to roles.
+// Accounts that must change their password can only use the endpoints that allow it.
+const requireAuth = (roles = null, { allowPasswordChange = false } = {}) => (req, res, next) => {
+  const sess = getSession(bearerToken(req));
+  if (!sess) return res.status(401).json({ error: 'unauthorized' });
+  if (roles && !roles.includes(sess.role)) return res.status(403).json({ error: 'forbidden' });
+  if (sess.user.mustChangePassword && !allowPasswordChange) {
+    return res.status(403).json({ error: 'password_change_required' });
+  }
+  req.auth = sess;
+  next();
+};
+
+const publicUser = (user) => ({
+  id: user.id,
+  name: user.name,
+  username: user.username,
+  role: user.role,
+  mustChangePassword: !!user.mustChangePassword,
+});
 
 // Remove kiosker that have been offline for a while to keep the list tidy
 const KIOSK_STALE_MS = 180_000; // 3 minute inactivity window
@@ -548,7 +665,7 @@ setInterval(() => {
   state.kiosks = state.kiosks.filter(k => k.lastSeen >= cutoff);
   addLog(`Fjernet ${stale.length} inaktive kiosker etter inaktivitet (før:${before} nå:${state.kiosks.length}, cutoff ${KIOSK_STALE_MS}ms, eldste ${ageMs}ms)`, 'INFO');
   saveState();
-  io.emit('state-update', state);
+  broadcastStaffState();
 }, 15_000);
 
 setInterval(() => {
@@ -561,8 +678,33 @@ setInterval(() => {
   state.counterDisplays = state.counterDisplays.filter(d => d.lastSeen >= cutoff);
   addLog(`Fjernet ${stale.length} inaktive skrankeskjermer etter inaktivitet (før:${before} nå:${state.counterDisplays.length}, cutoff ${DISPLAY_STALE_MS}ms, eldste ${ageMs}ms)`, 'INFO');
   saveState();
-  io.emit('state-update', state);
+  broadcastState();
 }, 15_000);
+
+// Housekeeping: expired sessions, OAuth codes and rate-limit buckets.
+setInterval(() => {
+  const now = Date.now();
+  let removed = 0;
+  Object.entries(state.sessions).forEach(([key, sess]) => {
+    if (!sess?.expiresAt || sess.expiresAt < now) {
+      delete state.sessions[key];
+      removed += 1;
+    }
+  });
+  if (removed > 0) {
+    saveState();
+    refreshAllSockets();
+  }
+  oauthCodes.forEach((entry, code) => {
+    if (entry.expiresAt < now) oauthCodes.delete(code);
+  });
+  apiRateLimits.forEach((entry, ip) => {
+    const active = entry.blocked ? entry.blockExpiry > now : entry.timestamps.some((t) => now - t < API_RATE_WINDOW_MS);
+    if (!active) apiRateLimits.delete(ip);
+  });
+  [loginFailuresByUser, loginFailuresByIp, publicTicketsBySocket, publicTicketsByIp, socketEvents, kioskPinAttempts, counterDisplayRegistrations]
+    .forEach((limiter) => limiter.sweep());
+}, 10 * 60 * 1000);
 
 // Lightweight printer reachability check
 const checkPrinter = (ip, port) => new Promise((resolve) => {
@@ -596,7 +738,7 @@ setInterval(async () => {
   }
   if (changed) {
     saveState();
-    io.emit('state-update', state);
+    broadcastStaffState();
   }
   const duration = Date.now() - started;
   if (duration > 2000) {
@@ -613,248 +755,89 @@ setInterval(async () => {
       addLog(`Skriver ${p.name || p.id} initial status: ${state.printers[i].status}`, ok ? 'INFO' : 'ALERT');
     }
     saveState();
-    io.emit('state-update', state);
+    broadcastStaffState();
   }
 })();
+
+// HTTP request logging (path only: query strings may carry codes and must not end up in logs)
+app.use((req, res, next) => {
+  const path = (req.originalUrl || req.url || '').split('?')[0];
+  if (path === '/health' || path.startsWith('/assets/')) return next();
+  const start = Date.now();
+  res.on('finish', () => {
+    const duration = Date.now() - start;
+    const status = res.statusCode;
+    const slowTag = duration > SLOW_REQUEST_MS ? ' SLOW' : '';
+    const level = status >= 500 ? 'ALERT' : status >= 400 ? 'ACTION' : (duration > SLOW_REQUEST_MS ? 'ACTION' : 'INFO');
+    addLog(`${req.method} ${path} -> ${status} (${duration}ms)${slowTag}`, level);
+  });
+  next();
+});
 
 // Apply API rate limiting before routes
 app.use(apiRateLimiter);
 
-// --- REST: server-side printing to avoid browser CORS/mixed-content ---
-app.post('/api/print-ticket', requireAllowedIP, requireApiKey, async (req, res) => {
-  const { ipAddress, port = 9100, ticket, serviceName, waitTime, language: langInput, brandText, brandLogoUrl } = req.body || {};
-  if (!ipAddress || !ticket?.number) {
-    return res.status(400).json({ ok: false, error: 'Missing printer or ticket' });
+const ticketWaitTime = (service) => {
+  const serviceWaitingCount = state.tickets.filter(t => t.serviceId === service.id && t.status === 'WAITING').length;
+  return serviceWaitingCount * (service.estimatedTimePerPersonMinutes || 1);
+};
+
+// --- REST: test print on a configured printer (admin session or API key) ---
+app.post('/api/print-ticket', requireAllowedIP, (req, res) => {
+  const sess = getSession(bearerToken(req));
+  const isAdmin = sess && sess.role === 'ADMIN' && !sess.user.mustChangePassword;
+  if (!isAdmin && !hasValidApiKey(req)) {
+    addLog(`Utskrift avvist: mangler admin-innlogging eller API-nøkkel fra ${getClientIp(req)}`, 'ALERT');
+    return res.status(401).json({ ok: false, error: 'unauthorized' });
   }
-  const lang = langInput === 'en' ? 'en' : 'no';
-  const labels = {
-    en: { welcome: 'Welcome', yourNumber: 'Your number', time: 'Time', wait: 'Est. wait', please: 'Please wait for your turn.', minutes: 'min' },
-    no: { welcome: 'Velkommen', yourNumber: 'Nummer', time: 'Tid', wait: 'Est. ventetid', please: 'Vennligst vent på din tur.', minutes: 'min' },
-  }[lang];
-  const brandLine = (() => {
-    const cleaned = (val) => cleanText(typeof val === 'string' ? val : '', 60);
-    const fromPayload = cleaned(brandText);
-    if (fromPayload) return fromPayload;
-    const fromState = cleaned(state.branding?.brandText);
-    if (fromState) return fromState;
-    return 'Q-Flow Pro';
-  })();
-  const logoUrl = (() => {
-    if (typeof brandLogoUrl === 'string' && brandLogoUrl.trim().length > 0) return brandLogoUrl.trim();
-    if (state.branding?.brandLogoUrl && state.branding.brandLogoUrl.trim().length > 0) return state.branding.brandLogoUrl.trim();
-    return '';
-  })();
-  const date = new Date().toLocaleTimeString(lang === 'en' ? 'en-GB' : 'no-NO', { hour: '2-digit', minute: '2-digit' });
-  const waitLine = (waitTime === undefined || waitTime === null)
-    ? `${labels.wait}: --`
-    : `${labels.wait}: ${waitTime} ${labels.minutes}`;
 
-  addLog(`Forbereder utskrift av billett ${ticket.number} (språk=${lang}, brand=${brandLine})`, 'INFO');
+  const { printerId, ticketNumber, serviceId, language } = req.body || {};
+  const printer = typeof printerId === 'string' ? state.printers.find(p => p.id === printerId) : null;
+  if (!printer) {
+    return res.status(400).json({ ok: false, error: 'unknown_printer' });
+  }
+  const service = typeof serviceId === 'string' ? state.services.find(s => s.id === serviceId) : null;
 
-  const defaultLogoSvg = `<svg width="140" height="140" viewBox="0 0 140 140" xmlns="http://www.w3.org/2000/svg"><rect x="18" y="18" width="104" height="104" rx="20" fill="#4f46e5"/><path d="M70 42l36 14-36 14-36-14 36-14Z" fill="#ffffff"/><path d="M70 64l36 14-36 14-36-14 36-14Z" fill="#e5e7eb"/><path d="M70 54l36 14-36 14-36-14 36-14Z" fill="#cbd5e1"/></svg>`;
-
-  const fetchLogoBuffer = async () => {
-    const tryUrls = [logoUrl, state.branding?.brandLogoUrl].filter(u => typeof u === 'string' && u.trim().length > 0);
-    for (const candidate of tryUrls) {
-      try {
-        if (candidate.startsWith('data:')) {
-          const base64 = candidate.split(',')[1] || '';
-          if (base64) return Buffer.from(base64, 'base64');
-          continue;
-        }
-        const resp = await fetch(candidate);
-        if (!resp.ok) continue;
-        const arr = await resp.arrayBuffer();
-        return Buffer.from(arr);
-      } catch (err) {
-        console.warn('Logo fetch failed', err?.message || err);
-        continue;
-      }
-    }
-    return Buffer.from(defaultLogoSvg);
-  };
-
-  const logoToRaster = async (buf) => {
-    try {
-      const { data, info } = await sharp(buf)
-        .resize({ width: 384, fit: 'inside', withoutEnlargement: true })
-        .flatten({ background: '#FFFFFF' })
-        .greyscale()
-        .threshold(180)
-        .raw()
-        .toBuffer({ resolveWithObject: true });
-
-      const bytesPerRow = Math.ceil(info.width / 8);
-      const raster = Buffer.alloc(bytesPerRow * info.height);
-      for (let y = 0; y < info.height; y++) {
-        for (let x = 0; x < info.width; x++) {
-          const byteIndex = y * bytesPerRow + (x >> 3);
-          const bit = 7 - (x & 7);
-          const pixel = data[y * info.width + x];
-          if (pixel === 0) raster[byteIndex] |= (1 << bit); // black pixel
-        }
-      }
-
-      const GS = '\x1d';
-      const m = '\x00';
-      const xL = String.fromCharCode(bytesPerRow & 0xff);
-      const xH = String.fromCharCode((bytesPerRow >> 8) & 0xff);
-      const yL = String.fromCharCode(info.height & 0xff);
-      const yH = String.fromCharCode((info.height >> 8) & 0xff);
-      const header = Buffer.from(`${GS}v0${m}${xL}${xH}${yL}${yH}`, 'binary');
-      return Buffer.concat([header, raster]);
-    } catch (err) {
-      console.warn('Logo rasterization failed', err?.message || err);
-      return null;
-    }
-  };
-
-  const buildEscPos = async () => {
-    const ESC = '\x1b';
-    const GS = '\x1d';
-    const reset = ESC + '@';
-    const cp1252 = ESC + 't' + '\x10'; // Codepage Windows-1252 for å/ø/æ
-    const center = ESC + 'a' + '\x01';
-    const left = ESC + 'a' + '\x00';
-    const boldOn = ESC + 'E' + '\x01';
-    const boldOff = ESC + 'E' + '\x00';
-    const doubleOn = GS + '!' + '\x11'; // double height & width
-    const doubleOff = GS + '!' + '\x00';
-    const cut = GS + 'V' + '\x00';
-
-    // Tight top padding; use CP1252 to render å/ø/æ correctly
-    const logoBuf = await fetchLogoBuffer();
-    const raster = logoBuf ? await logoToRaster(logoBuf) : null;
-
-    const parts = [
-      Buffer.from(reset + cp1252, 'latin1'),
-      raster ? Buffer.from(center, 'latin1') : null,
-      raster,
-      Buffer.from(center + boldOn + `${brandLine}\n` + boldOff + `${labels.welcome}\n\n`, 'latin1'),
-      Buffer.from(boldOn + `${labels.yourNumber}:\n` + boldOff + doubleOn + `${ticket.number}\n` + doubleOff + '\n', 'latin1'),
-      Buffer.from((serviceName ? serviceName + '\n\n' : '\n'), 'latin1'),
-      Buffer.from(left + `${labels.time}: ${date}\n` + `${waitLine}\n\n`, 'latin1'),
-      Buffer.from(center + `${labels.please}\n\n` + cut + '\n', 'latin1'),
-    ].filter(Boolean);
-
-    return Buffer.concat(parts);
-  };
-
-  const sendRaw9100 = () => new Promise(async (resolve, reject) => {
-    const sock = new net.Socket();
-    const payload = await buildEscPos();
-    let settled = false;
-
-    const done = (err) => {
-      if (settled) return;
-      settled = true;
-      sock.destroy();
-      err ? reject(err) : resolve(true);
-    };
-
-    sock.setTimeout(8000);
-    sock.once('error', done);
-    sock.once('timeout', () => done(new Error('timeout')));
-    sock.connect(port, ipAddress, () => {
-      sock.write(payload, (err) => {
-        if (err) return done(err);
-        // small delay before closing to ensure flush
-        setTimeout(() => done(null), 200);
-      });
-    });
+  printTicket({
+    printer,
+    ticket: { number: cleanText(ticketNumber, 12) || 'TEST' },
+    serviceName: service?.name,
+    waitTime: service ? ticketWaitTime(service) : undefined,
+    language,
+    brandText: state.branding?.brandText,
+    brandLogoUrl: state.branding?.brandLogoUrl,
+    log: addLog,
+  }).then((result) => {
+    res.status(result.ok ? 200 : 502).json(result);
+  }).catch((err) => {
+    addLog(`Utskrift feilet: ${err?.message || err}`, 'ALERT');
+    res.status(500).json({ ok: false, error: 'print_failed' });
   });
-
-  try {
-    await sendRaw9100();
-    addLog(`Sendte billett ${ticket.number} til skriver ${ipAddress}:${port}`, 'INFO');
-    return res.json({ ok: true, method: 'raw9100' });
-  } catch (rawErr) {
-    console.error('Raw 9100 print failed, will try HTTP ePOS if available:', rawErr);
-    addLog(`Utskrift feilet (raw9100) til ${ipAddress}:${port}: ${rawErr?.message || rawErr}`, 'ALERT');
-
-    // Fallback: try HTTP ePOS (if enabled on printer)
-    const xml = `
-      <s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">
-        <s:Body>
-          <epos-print xmlns="http://www.epson-pos.com/schemas/2011/03/epos-print">
-            <text lang="en"/>
-            <text align="center"/>
-            <text smooth="true"/>
-            <text font="font_a" width="1" height="1"/>
-            <text>${labels.welcome}\n</text>
-            <text font="font_a" width="2" height="2"/>
-            <text>${brandLine}\n</text>
-            <feed line="1"/>
-            <text font="font_a" width="1" height="1"/>
-            <text>${labels.yourNumber}:\n</text>
-            <text font="font_b" width="4" height="4"/>
-            <text>${ticket.number}\n</text>
-            <feed line="1"/>
-            <text font="font_a" width="1" height="1"/>
-            <text>${serviceName || ''}\n</text>
-            <feed line="1"/>
-            <text align="left"/>
-            <text font="font_a" width="1" height="1"/>
-            <text>${labels.time}: ${date}\n</text>
-            <text>${waitLine}\n</text>
-            <feed line="2"/>
-            <text align="center"/>
-            <text>${labels.please}\n</text>
-            <feed line="1"/>
-            <cut type="feed"/>
-          </epos-print>
-        </s:Body>
-      </s:Envelope>
-    `;
-
-    const url = `http://${ipAddress}/cgi-bin/epos/service.cgi?devid=local_printer&timeout=8000`;
-    try {
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/xml; charset=utf-8', 'SOAPAction': '""' },
-        body: xml,
-      });
-
-      if (!response.ok) {
-        return res.status(502).json({ ok: false, method: 'raw9100+epos', status: response.status });
-      }
-
-      addLog(`Sendte billett ${ticket.number} via ePOS til ${ipAddress}`, 'INFO');
-      return res.json({ ok: true, method: 'epos-http' });
-    } catch (httpErr) {
-      console.error('HTTP ePOS fallback failed:', httpErr);
-      addLog(`Utskrift feilet (epos-http) til ${ipAddress}: ${httpErr?.message || httpErr}`, 'ALERT');
-      return res.status(502).json({ ok: false, method: 'raw9100+epos', error: 'printer_unreachable' });
-    }
-  }
 });
 
 // --- Auth Endpoints ---
 
 app.post('/api/login', (req, res) => {
   const { username, password } = req.body || {};
-  if (!username || !password) {
+  if (typeof username !== 'string' || typeof password !== 'string' || !username || !password) {
     addLog('Innlogging feilet: mangler brukernavn eller passord', 'ALERT');
     return res.status(400).json({ error: 'missing_credentials' });
   }
   const ip = getClientIp(req);
-  if (isLoginBlocked(ip)) {
-    addLog(`Innlogging blokkert for ${username} fra ${ip} (for mange forsøk)`, 'ALERT');
+  const key = loginKey(ip, username);
+  if (loginFailuresByUser.isBlocked(key) || loginFailuresByIp.isBlocked(ip)) {
+    addLog(`Innlogging blokkert for ${cleanText(username, 64)} fra ${ip} (for mange forsøk)`, 'ALERT');
     return res.status(429).json({ error: 'too_many_attempts' });
   }
 
   const user = (state.users || []).find(u => u.username === username);
-  const attempts = registerLoginAttempt(ip);
-  if (!user) {
-    addLog(`Innlogging feilet for ${username} fra ${ip}`, 'ALERT');
-    return res.status(401).json({ error: 'invalid_credentials', attempts });
+  if (!user || !verifyPassword(password, user.passwordHash)) {
+    loginFailuresByUser.hit(key);
+    loginFailuresByIp.hit(ip);
+    addLog(`Innlogging feilet for ${cleanText(username, 64)} fra ${ip}`, 'ALERT');
+    return res.status(401).json({ error: 'invalid_credentials' });
   }
-
-  const valid = verifyPassword(password, user.passwordHash);
-  if (!valid) {
-    addLog(`Innlogging feilet for ${username} fra ${ip}`, 'ALERT');
-    return res.status(401).json({ error: 'invalid_credentials', attempts });
-  }
+  loginFailuresByUser.reset(key);
 
   // If legacy hash, upgrade to bcrypt
   if (!user.passwordHash.startsWith('$2')) {
@@ -866,75 +849,47 @@ app.post('/api/login', (req, res) => {
   }
 
   const token = createSession(user.id);
-  addLog(`Innlogging vellykket for ${username} (${user.role}) fra ${ip}`, 'ACTION');
-  const isDefaultUser = (user.username === DEFAULT_ADMIN_USERNAME || user.username === DEFAULT_OPERATOR_USERNAME);
-  const usingDefaultPassword = verifyPassword(user.username, user.passwordHash) || (user.pinCode && verifyPassword(user.pinCode, user.passwordHash));
-  const mustChangePassword = !!(user.mustChangePassword || (isDefaultUser && usingDefaultPassword));
-  return res.json({ 
-    token, 
-    user: { 
-      id: user.id, 
-      name: user.name, 
-      username: user.username, 
-      role: user.role,
-      mustChangePassword
-    } 
-  });
+  addLog(`Innlogging vellykket for ${user.username} (${user.role}) fra ${ip}`, 'ACTION');
+  return res.json({ token, user: publicUser(state.users.find(u => u.id === user.id) || user) });
 });
 
 app.post('/api/logout', (req, res) => {
-  const { token } = req.body || {};
-  if (token && state.sessions[token]) {
-    const session = getSession(token);
-    delete state.sessions[token];
+  const token = bearerToken(req) || (typeof req.body?.token === 'string' ? req.body.token : null);
+  const sess = getSession(token);
+  if (sess) {
+    delete state.sessions[sess.key];
     saveState();
-    if (session?.user) {
-      addLog(`Bruker logget ut: ${session.user.username} (${session.user.role})`, 'INFO');
-    }
+    addLog(`Bruker logget ut: ${sess.user.username} (${sess.user.role})`, 'INFO');
+    refreshAllSockets();
   }
   return res.json({ ok: true });
 });
 
-app.get('/api/me', (req, res) => {
-  const auth = req.headers.authorization || '';
-  const token = auth.startsWith('Bearer ') ? auth.slice(7) : null;
-  const session = getSession(token);
-  if (!session?.user) return res.status(401).json({ error: 'unauthorized' });
-  const { user } = session;
-  const isDefaultUser = (user.username === DEFAULT_ADMIN_USERNAME || user.username === DEFAULT_OPERATOR_USERNAME);
-  const usingDefaultPassword = verifyPassword(user.username, user.passwordHash) || (user.pinCode && verifyPassword(user.pinCode, user.passwordHash));
-  const mustChangePassword = !!(user.mustChangePassword || (isDefaultUser && usingDefaultPassword));
-  return res.json({ 
-    user: { 
-      id: user.id, 
-      name: user.name, 
-      username: user.username, 
-      role: user.role,
-      mustChangePassword
-    } 
-  });
+app.get('/api/me', requireAuth(null, { allowPasswordChange: true }), (req, res) => {
+  return res.json({ user: publicUser(req.auth.user) });
 });
 
-app.post('/api/user/password', (req, res) => {
-  const auth = req.headers.authorization || '';
-  const token = auth.startsWith('Bearer ') ? auth.slice(7) : null;
-  const session = getSession(token);
-  if (!session?.user) return res.status(401).json({ error: 'unauthorized' });
-  const userIdx = (state.users || []).findIndex(u => u.id === session.user.id);
+app.post('/api/user/password', requireAuth(null, { allowPasswordChange: true }), (req, res) => {
+  const userIdx = (state.users || []).findIndex(u => u.id === req.auth.user.id);
   if (userIdx === -1) return res.status(401).json({ error: 'unauthorized' });
   const { oldPassword, newPassword } = req.body || {};
-  if (!newPassword) return res.status(400).json({ error: 'missing_new_password' });
+  if (typeof newPassword !== 'string' || !newPassword) return res.status(400).json({ error: 'missing_new_password' });
   const policy = passwordPolicy(newPassword);
   if (!policy.ok) return res.status(400).json({ error: policy.error });
   const user = state.users[userIdx];
-  if (user.passwordHash && (!oldPassword || !verifyPassword(oldPassword, user.passwordHash))) {
+  if (user.passwordHash && (typeof oldPassword !== 'string' || !verifyPassword(oldPassword, user.passwordHash))) {
     addLog(`Passordendring feilet for ${user.username}: ugyldig gammelt passord`, 'ALERT');
     return res.status(401).json({ error: 'invalid_old_password' });
   }
-  // Clear mustChangePassword flag when user changes password
+  if (user.passwordHash && oldPassword === newPassword) {
+    return res.status(400).json({ error: 'password_unchanged' });
+  }
   state.users[userIdx] = { ...user, passwordHash: hashPassword(newPassword), mustChangePassword: false };
+  // Sign out every other device of this user.
+  deleteUserSessions(user.id, req.auth.key);
   saveState();
   addLog(`Passord endret for ${user.username}`, 'ACTION');
+  refreshAllSockets();
   return res.json({ ok: true });
 });
 
@@ -942,123 +897,93 @@ app.post('/api/user/password', (req, res) => {
 
 // Get available auth providers (for login page)
 app.get('/api/auth/providers', (req, res) => {
-  const providers = {
+  return res.json({
     local: true,
     google: isGoogleConfigured(state),
     oidc: isOIDCConfigured(state)
+  });
+});
+
+const LOGIN_PAGE = '/#/login';
+const KNOWN_AUTH_ERRORS = new Set(Object.values(AUTH_ERRORS));
+
+const oauthCallback = (provider, label) => (req, res, next) => {
+  const ip = getClientIp(req);
+  const fail = (code) => {
+    loginFailuresByIp.hit(ip);
+    return res.redirect(`${LOGIN_PAGE}?error=${encodeURIComponent(code)}`);
   };
-  return res.json(providers);
-});
+  const configured = provider === 'google' ? isGoogleConfigured(state) : isOIDCConfigured(state);
+  if (!configured) return fail(`${provider}_not_configured`);
 
-// Google OAuth routes
-app.get('/auth/google', (req, res, next) => {
+  passport.authenticate(provider, { session: false }, (err, user, info) => {
+    if (err) {
+      addLog(`${label} feil: ${err.message || err}`, 'ALERT');
+      return fail(`${provider}_auth_failed`);
+    }
+    if (!user) {
+      const code = KNOWN_AUTH_ERRORS.has(info?.message) ? info.message : `${provider}_auth_failed`;
+      addLog(`${label} avvist fra ${ip}: ${code}`, 'ALERT');
+      return fail(code);
+    }
+    // Persist linked/provisioned users
+    saveState();
+    const code = issueLoginCode(user.id);
+    addLog(`${label} innlogging vellykket for ${user.username} (${user.role}) fra ${ip}`, 'ACTION');
+    // The hash fragment never reaches the server or proxy logs.
+    return res.redirect(`${LOGIN_PAGE}?code=${code}`);
+  })(req, res, next);
+};
+
+const oauthStart = (provider, label, options) => (req, res, next) => {
   const ip = getClientIp(req);
-  if (isLoginBlocked(ip)) {
-    addLog(`Google OAuth blokkert for ${ip} (for mange forsøk)`, 'ALERT');
+  if (loginFailuresByIp.isBlocked(ip)) {
+    addLog(`${label} blokkert for ${ip} (for mange forsøk)`, 'ALERT');
     return res.status(429).json({ error: 'too_many_attempts' });
   }
-  
-  if (!isGoogleConfigured(state)) {
-    return res.status(400).json({ error: 'Google authentication not configured' });
+  const configured = provider === 'google' ? isGoogleConfigured(state) : isOIDCConfigured(state);
+  if (!configured) {
+    return res.status(400).json({ error: `${label} authentication not configured` });
   }
-  passport.authenticate('google', { scope: ['profile', 'email'] })(req, res, next);
-});
+  passport.authenticate(provider, options)(req, res, next);
+};
 
-app.get('/auth/google/callback', (req, res, next) => {
-  const ip = getClientIp(req);
-  registerLoginAttempt(ip); // Count attempt
-  
-  if (!isGoogleConfigured(state)) {
-    return res.status(400).json({ error: 'Google authentication not configured' });
-  }
-  
-  passport.authenticate('google', { session: false, failureRedirect: '/login?error=google_auth_failed' }, (err, user, info) => {
-    if (err) {
-      addLog(`Google OAuth error: ${err.message || err}`, 'ALERT');
-      return res.redirect('/login?error=google_auth_failed');
-    }
-    
-    if (!user) {
-      const message = info?.message || 'Authentication failed';
-      addLog(`Google OAuth failed: ${message}`, 'ALERT');
-      return res.redirect(`/login?error=${encodeURIComponent(message)}`);
-    }
-    
-    // Save user changes
-    saveState();
-    
-    // Create session token
-    const token = createSession(user.id);
-    addLog(`Google OAuth innlogging vellykket for ${user.username} (${user.role}) fra ${ip}`, 'ACTION');
-    
-    // Redirect to frontend with token
-    return res.redirect(`/login?token=${token}`);
-  })(req, res, next);
-});
+app.get('/auth/google', oauthStart('google', 'Google', { scope: ['profile', 'email'] }));
+app.get('/auth/google/callback', oauthCallback('google', 'Google OAuth'));
+app.get('/auth/oidc', oauthStart('oidc', 'OIDC'));
+app.get('/auth/oidc/callback', oauthCallback('oidc', 'OIDC'));
 
-// OIDC routes
-app.get('/auth/oidc', (req, res, next) => {
-  const ip = getClientIp(req);
-  if (isLoginBlocked(ip)) {
-    addLog(`OIDC OAuth blokkert for ${ip} (for mange forsøk)`, 'ALERT');
-    return res.status(429).json({ error: 'too_many_attempts' });
+// Exchanges the single-use code from the OAuth redirect for a session token.
+app.post('/api/auth/exchange', (req, res) => {
+  const code = req.body?.code;
+  const entry = typeof code === 'string' ? oauthCodes.get(code) : null;
+  if (entry) oauthCodes.delete(code);
+  if (!entry || entry.expiresAt < Date.now()) {
+    return res.status(400).json({ error: 'invalid_code' });
   }
-  
-  if (!isOIDCConfigured(state)) {
-    return res.status(400).json({ error: 'OIDC authentication not configured' });
-  }
-  passport.authenticate('oidc')(req, res, next);
-});
-
-app.get('/auth/oidc/callback', (req, res, next) => {
-  const ip = getClientIp(req);
-  registerLoginAttempt(ip); // Count attempt
-  
-  if (!isOIDCConfigured(state)) {
-    return res.status(400).json({ error: 'OIDC authentication not configured' });
-  }
-  
-  passport.authenticate('oidc', { session: false, failureRedirect: '/login?error=oidc_auth_failed' }, (err, user, info) => {
-    if (err) {
-      addLog(`OIDC OAuth error: ${err.message || err}`, 'ALERT');
-      return res.redirect('/login?error=oidc_auth_failed');
-    }
-    
-    if (!user) {
-      const message = info?.message || 'Authentication failed';
-      addLog(`OIDC OAuth failed: ${message}`, 'ALERT');
-      return res.redirect(`/login?error=${encodeURIComponent(message)}`);
-    }
-    
-    // Save user changes
-    saveState();
-    
-    // Create session token
-    const token = createSession(user.id);
-    addLog(`OIDC innlogging vellykket for ${user.username} (${user.role}) fra ${ip}`, 'ACTION');
-    
-    // Redirect to frontend with token
-    return res.redirect(`/login?token=${token}`);
-  })(req, res, next);
+  const user = state.users.find(u => u.id === entry.userId);
+  if (!user) return res.status(400).json({ error: 'invalid_code' });
+  const token = createSession(user.id);
+  return res.json({ token, user: publicUser(user) });
 });
 
 const actorLabel = (socket) => {
   const role = socket?.data?.authRole || 'PUBLIC';
   const uid = socket?.data?.userId;
   const user = uid ? (state.users || []).find((u) => u.id === uid) : null;
-  const name = user?.name || user?.username || 'Ukjent';
+  const name = user?.name || user?.username || (socket?.data?.kioskId ? `Kiosk ${socket.data.kioskId}` : 'Ukjent');
   return `${name} [${role}${uid ? `:${uid}` : ''}]`;
 };
 
-const pruneOldLogs = () => {
+const pruneOldFiles = (dir, extension, retentionDays, label) => {
   const started = Date.now();
   try {
-    if (!fs.existsSync(LOG_DIR)) return;
-    const cutoff = Date.now() - LOG_RETENTION_DAYS * 24 * 60 * 60 * 1000;
-    const files = fs.readdirSync(LOG_DIR).filter(f => f.endsWith('.log'));
+    if (!fs.existsSync(dir)) return;
+    const cutoff = Date.now() - retentionDays * 24 * 60 * 60 * 1000;
+    const files = fs.readdirSync(dir).filter(f => f.endsWith(extension));
     let removed = 0;
     files.forEach((f) => {
-      const full = join(LOG_DIR, f);
+      const full = join(dir, f);
       const stat = fs.statSync(full);
       if (stat.mtimeMs < cutoff) {
         fs.unlinkSync(full);
@@ -1067,50 +992,15 @@ const pruneOldLogs = () => {
     });
     const duration = Date.now() - started;
     if (removed > 0 || duration > 500) {
-      addLog(`Prunet ${removed} gamle loggfiler (${duration}ms)`, 'INFO');
+      addLog(`Prunet ${removed} gamle ${label} (${duration}ms)`, 'INFO');
     }
   } catch (e) {
-    console.warn('Failed to prune logs', e);
+    console.warn(`Failed to prune ${label}`, e);
   }
 };
 
-const pruneOldBackups = () => {
-  const started = Date.now();
-  try {
-    if (!fs.existsSync(BACKUP_DIR)) return;
-    const cutoff = Date.now() - BACKUP_RETENTION_DAYS * 24 * 60 * 60 * 1000;
-    const files = fs.readdirSync(BACKUP_DIR).filter(f => f.endsWith('.db'));
-    let removed = 0;
-    files.forEach((f) => {
-      const full = join(BACKUP_DIR, f);
-      const stat = fs.statSync(full);
-      if (stat.mtimeMs < cutoff) {
-        fs.unlinkSync(full);
-        removed += 1;
-      }
-    });
-    const duration = Date.now() - started;
-    if (removed > 0 || duration > 500) {
-      addLog(`Prunet ${removed} gamle backups (${duration}ms)`, 'INFO');
-    }
-  } catch (e) {
-    console.warn('Failed to prune backups', e);
-  }
-};
-
-// HTTP request logging middleware
-app.use((req, res, next) => {
-  const start = Date.now();
-  res.on('finish', () => {
-    const duration = Date.now() - start;
-    const path = req.originalUrl || req.url;
-    const status = res.statusCode;
-    const slowTag = duration > SLOW_REQUEST_MS ? ' SLOW' : '';
-    const level = status >= 500 ? 'ALERT' : status >= 400 ? 'ACTION' : (duration > SLOW_REQUEST_MS ? 'ACTION' : 'INFO');
-    addLog(`${req.method} ${path} -> ${status} (${duration}ms)${slowTag}`, level);
-  });
-  next();
-});
+const pruneOldLogs = () => pruneOldFiles(LOG_DIR, '.log', LOG_RETENTION_DAYS, 'loggfiler');
+const pruneOldBackups = () => pruneOldFiles(BACKUP_DIR, '.db', BACKUP_RETENTION_DAYS, 'backups');
 
 // Periodic log pruning
 pruneOldLogs();
@@ -1120,61 +1010,192 @@ setInterval(pruneOldLogs, 12 * 60 * 60 * 1000); // every 12h
 pruneOldBackups();
 setInterval(pruneOldBackups, 12 * 60 * 60 * 1000);
 
+// --- Settings validation ---
+
+const VALID_TICKET_STATUSES = new Set(['WAITING', 'SERVING', 'COMPLETED', 'CANCELLED']);
+const SOUND_KEYS = ['kioskEffects', 'adminEffects', 'callChime', 'callVoice'];
+const ROLE_OF = (role) => (role === 'ADMIN' ? 'ADMIN' : 'OPERATOR');
+
+const isAllowedLogoUrl = (url) => url === ''
+  || /^data:image\/(png|jpe?g|gif|webp|svg\+xml);base64,[A-Za-z0-9+/=]+$/.test(url)
+  || /^https?:\/\/[^\s]+$/i.test(url);
+
+// Returns { users, removedIds, credentialChangedIds } or { error }.
+const buildUsersUpdate = (incoming) => {
+  const seen = new Set();
+  const credentialChangedIds = [];
+  const nextUsers = [];
+  for (const u of incoming) {
+    if (!u || typeof u !== 'object') return { error: 'invalid_user' };
+    const existing = typeof u.id === 'string' ? state.users.find(x => x.id === u.id) : null;
+    const username = cleanText(u.username || existing?.username || '', 64);
+    if (!username) return { error: 'missing_username' };
+    if (seen.has(username.toLowerCase())) return { error: 'duplicate_username' };
+    seen.add(username.toLowerCase());
+    const name = cleanText(u.name || '', 80) || existing?.name || username;
+
+    // Hashes are never accepted from clients; only a new plaintext password can change them.
+    let passwordHash = existing?.passwordHash || '';
+    let mustChangePassword = !!existing?.mustChangePassword;
+    if (u.password) {
+      const policy = passwordPolicy(u.password);
+      if (!policy.ok) return { error: policy.error };
+      passwordHash = hashPassword(u.password);
+      mustChangePassword = u.mustChangePassword === true;
+      if (existing) credentialChangedIds.push(existing.id);
+    }
+    if (!existing && !passwordHash) return { error: 'password_required' };
+
+    nextUsers.push({
+      id: existing?.id || (isSafeId(u.id) ? u.id : `u_${randomId()}`),
+      name,
+      username,
+      role: ROLE_OF(u.role),
+      provider: existing?.provider || 'local',
+      email: existing?.email,
+      externalId: existing?.externalId,
+      passwordHash,
+      mustChangePassword,
+    });
+  }
+  if (!nextUsers.some(u => u.role === 'ADMIN')) return { error: 'must_have_admin' };
+  const keptIds = new Set(nextUsers.map(u => u.id));
+  const removedIds = state.users.filter(u => !keptIds.has(u.id)).map(u => u.id);
+  // A demoted user must not keep an admin session.
+  nextUsers.forEach((u) => {
+    const before = state.users.find(x => x.id === u.id);
+    if (before && before.role !== u.role) credentialChangedIds.push(u.id);
+  });
+  return { users: nextUsers, removedIds, credentialChangedIds };
+};
+
+const buildPrintersUpdate = (incoming) => {
+  const printers = [];
+  for (const p of incoming) {
+    if (!p || typeof p !== 'object') return { error: 'invalid_printer' };
+    const ipAddress = typeof p.ipAddress === 'string' ? p.ipAddress.trim() : '';
+    const port = Number(p.port) || 9100;
+    if (!isValidPrinterHost(ipAddress) || !isValidPort(port)) return { error: 'invalid_printer' };
+    const existing = typeof p.id === 'string' ? state.printers.find(x => x.id === p.id) : null;
+    printers.push({
+      id: existing?.id || (isSafeId(p.id) ? p.id : randomId()),
+      name: cleanText(p.name, 80) || ipAddress,
+      ipAddress,
+      port,
+      type: p.type === 'GENERIC_NETWORK' ? 'GENERIC_NETWORK' : 'EPSON_IP',
+      status: existing?.status || 'OFFLINE',
+    });
+  }
+  return { printers };
+};
+
+const mergeProvider = (current = {}, incoming = {}, extraBooleans = []) => {
+  const next = { ...current };
+  if (typeof incoming.enabled === 'boolean') next.enabled = incoming.enabled;
+  if (typeof incoming.clientId === 'string') next.clientId = cleanText(incoming.clientId, 512);
+  // Secrets are write-only: an empty value means "keep the stored secret".
+  if (typeof incoming.clientSecret === 'string' && incoming.clientSecret.trim()) next.clientSecret = incoming.clientSecret.trim().slice(0, 1024);
+  if (typeof incoming.autoProvision === 'boolean') next.autoProvision = incoming.autoProvision;
+  if (incoming.defaultRole !== undefined) next.defaultRole = ROLE_OF(incoming.defaultRole);
+  extraBooleans.forEach((key) => {
+    if (typeof incoming[key] === 'boolean') next[key] = incoming[key];
+  });
+  return next;
+};
+
 // --- Socket.IO Logic ---
 
 io.use((socket, next) => {
   const authHeader = socket.handshake.headers?.authorization || '';
   const tokenFromHeader = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
-  const token = socket.handshake.auth?.token || tokenFromHeader || socket.handshake.query?.token;
-  const session = getSession(token);
-  socket.data.authRole = session?.role || 'PUBLIC';
-  socket.data.userId = session?.user?.id;
-  socket.data.token = session?.token;
+  const token = socket.handshake.auth?.token || tokenFromHeader;
+  const deviceToken = socket.handshake.auth?.deviceToken;
+  socket.data.token = typeof token === 'string' ? token : null;
+  socket.data.deviceToken = typeof deviceToken === 'string' ? deviceToken : null;
+  socket.data.ip = getSocketIp(socket);
   return next();
 });
 
 io.on('connection', (socket) => {
-  console.log('Client connected:', socket.id);
-  addLog(`Socket connected ${socket.id} role=${socket.data.authRole || 'PUBLIC'}`, 'INFO');
-  
-  // Send current state to newly connected client
-  socket.emit('init-state', state);
+  applySocketAuth(socket);
+  addLog(`Socket connected ${socket.id} role=${socket.data.authRole} ip=${socket.data.ip}`, 'INFO');
+
+  // Rejected packets surface as 'error' events; without a listener they would crash the process.
+  socket.on('error', (err) => {
+    if (err?.message === 'rate_limited' && !socket.data.rateLimitLogged) {
+      socket.data.rateLimitLogged = true;
+      addLog(`Socket ${socket.id} fra ${socket.data.ip} struper (for mange hendelser)`, 'ALERT');
+    }
+  });
+
+  // Unauthenticated and kiosk sockets get a per-socket event budget.
+  socket.use(([event], next) => {
+    if (socket.data.authRole === 'ADMIN' || socket.data.authRole === 'OPERATOR') return next();
+    if (!socketEvents.hit(socket.id)) {
+      socket.emit('action-denied', { error: 'rate_limited', event });
+      return next(new Error('rate_limited'));
+    }
+    return next();
+  });
+
+  socket.emit('session-info', sessionInfo(socket));
+  sendState(socket);
 
   socket.on('disconnect', (reason) => {
+    socketEvents.reset(socket.id);
+    publicTicketsBySocket.reset(socket.id);
     addLog(`Socket disconnected ${socket.id} (${reason})`, 'INFO');
   });
 
   // Allow clients to request state again (e.g., if initial emit was missed)
   socket.on('request-state', () => {
-    socket.emit('init-state', state);
+    refreshSocket(socket);
+    sendState(socket);
   });
 
   // --- Ticket Handlers ---
 
-  socket.on('add-ticket', async ({ serviceId, kioskId, language }) => {
+  socket.on('add-ticket', async (payload, ack) => {
+    const reply = typeof ack === 'function' ? ack : () => {};
+    const deny = (error) => {
+      socket.emit('add-ticket-denied', { error });
+      reply({ ok: false, error });
+    };
+    refreshSocket(socket);
+    const { serviceId, language } = payload || {};
+
     if (state.isClosed) {
       addLog('Forsøk på å trekke billett mens systemet er stengt', 'ALERT');
-      socket.emit('add-ticket-denied', { error: 'closed' });
-      return;
+      return deny('closed');
     }
-    const service = state.services.find(s => s.id === serviceId && s.isOpen !== false);
+    const service = typeof serviceId === 'string' ? state.services.find(s => s.id === serviceId && s.isOpen !== false) : null;
     if (!service) {
-      addLog(`Forsøk på å trekke billett for utilgjengelig tjeneste (${serviceId})`, 'ALERT');
-      socket.emit('add-ticket-denied', { error: 'service_unavailable' });
-      return;
+      addLog(`Forsøk på å trekke billett for utilgjengelig tjeneste (${cleanText(String(serviceId ?? ''), 40)})`, 'ALERT');
+      return deny('service_unavailable');
+    }
+    if (socket.data.authRole === 'PUBLIC') {
+      if (!publicTicketsBySocket.hit(socket.id) || !publicTicketsByIp.hit(socket.data.ip)) {
+        addLog(`Billett avvist for ${socket.data.ip}: for mange billetter på kort tid`, 'ALERT');
+        return deny('rate_limited');
+      }
+    }
+    const waitingCount = state.tickets.filter(t => t.status === 'WAITING').length;
+    if (waitingCount >= MAX_WAITING_TICKETS) {
+      addLog(`Billett avvist: køen er full (${waitingCount} ventende)`, 'ALERT');
+      return deny('queue_full');
     }
 
     // Calculate number
     const serviceTickets = state.tickets.filter(t => t.serviceId === serviceId);
     let maxNum = 0;
     serviceTickets.forEach(t => {
-        const num = parseInt(t.number.replace(service.prefix, ''));
-        if (!isNaN(num) && num > maxNum) maxNum = num;
+      const num = parseInt(t.number.replace(service.prefix, ''));
+      if (!isNaN(num) && num > maxNum) maxNum = num;
     });
     const nextNum = (maxNum + 1).toString().padStart(3, '0');
 
     const newTicket = {
-      id: Math.random().toString(36).slice(2, 11),
+      id: crypto.randomBytes(6).toString('hex'),
       number: `${service.prefix}${nextNum}`,
       serviceId,
       status: 'WAITING',
@@ -1184,66 +1205,49 @@ io.on('connection', (socket) => {
     state.tickets.push(newTicket);
     addLog(`Ny billett trukket: ${newTicket.number} (${service.name})`, 'ACTION');
 
-    const waitingCount = state.tickets.filter(t => t.status === 'WAITING').length;
-    if (waitingCount >= WAITING_ALERT_THRESHOLD && Date.now() - lastQueueAlertAt > WAITING_ALERT_INTERVAL_MS) {
+    if (waitingCount + 1 >= WAITING_ALERT_THRESHOLD && Date.now() - lastQueueAlertAt > WAITING_ALERT_INTERVAL_MS) {
       lastQueueAlertAt = Date.now();
-      addLog(`Kø over terskel ${WAITING_ALERT_THRESHOLD}: ${waitingCount} ventende`, 'ALERT');
+      addLog(`Kø over terskel ${WAITING_ALERT_THRESHOLD}: ${waitingCount + 1} ventende`, 'ALERT');
     }
-    
+
     saveState();
-    io.emit('state-update', state); // Broadcast to all
+    broadcastState();
 
-    // Kiosk-driven printing happens server-side to avoid exposing API keys in browser clients.
-    const kioskKey = typeof kioskId === 'string' && kioskId.trim().length > 0 ? kioskId.trim() : '';
-    if (!kioskKey) return;
-
-    const kiosk = state.kiosks.find(k => k.id === kioskKey);
-    const assignedPrinterId = kiosk?.assignedPrinterId || state.kioskPrinterAssignments?.[kioskKey];
-    const printer = state.printers.find(p => p.id === assignedPrinterId);
-    if (!printer?.ipAddress) {
+    // Only an activated kiosk device can make the server print, and only on its own printer.
+    const kioskKey = socket.data.kioskId;
+    const assignedPrinterId = kioskKey
+      ? (state.kiosks.find(k => k.id === kioskKey)?.assignedPrinterId || state.kioskPrinterAssignments?.[kioskKey])
+      : null;
+    const printer = assignedPrinterId ? state.printers.find(p => p.id === assignedPrinterId) : null;
+    if (kioskKey && !printer) {
       addLog(`Ingen skriver tilordnet kiosk ${kioskKey} ved utskrift av ${newTicket.number}`, 'INFO');
-      return;
     }
+    reply({ ok: true, ticket: newTicket, printing: !!printer });
+    if (!printer) return;
 
-    const lang = language === 'en' ? 'en' : 'no';
-    const serviceWaitingCount = state.tickets.filter(t => t.serviceId === serviceId && t.status === 'WAITING').length;
-    const waitPerPerson = service.estimatedTimePerPersonMinutes || 1;
-    const waitTime = serviceWaitingCount * waitPerPerson;
-    const printUrl = `http://127.0.0.1:${process.env.PORT || 3000}/api/print-ticket`;
-    const headers = { 'Content-Type': 'application/json' };
-    if (API_KEY_REQUIRED && API_KEYS[0]) {
-      headers['x-api-key'] = API_KEYS[0];
-    }
-
-    try {
-      const response = await fetch(printUrl, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
-          ipAddress: printer.ipAddress,
-          port: printer.port || 9100,
-          ticket: newTicket,
-          serviceName: service.name,
-          waitTime,
-          language: lang,
-          brandText: state.branding?.brandText,
-          brandLogoUrl: state.branding?.brandLogoUrl,
-        }),
-      });
-
-      if (!response.ok) {
-        addLog(`Kiosk-utskrift feilet for ${newTicket.number} via ${printer.ipAddress}:${printer.port || 9100} (HTTP ${response.status})`, 'ALERT');
-      }
-    } catch (err) {
-      addLog(`Kiosk-utskrift feilet for ${newTicket.number} via ${printer.ipAddress}:${printer.port || 9100}: ${err?.message || err}`, 'ALERT');
+    const result = await printTicket({
+      printer,
+      ticket: newTicket,
+      serviceName: service.name,
+      waitTime: ticketWaitTime(service),
+      language: language === 'en' ? 'en' : 'no',
+      brandText: state.branding?.brandText,
+      brandLogoUrl: state.branding?.brandLogoUrl,
+      log: addLog,
+    }).catch((err) => ({ ok: false, error: err?.message || String(err) }));
+    if (!result.ok) {
+      addLog(`Kiosk-utskrift feilet for ${newTicket.number} via ${printer.ipAddress}:${printer.port || 9100} (${result.error})`, 'ALERT');
     }
   });
 
-  socket.on('update-ticket-status', ({ ticketId, status, counterId }) => {
+  socket.on('update-ticket-status', (payload) => {
+    const { ticketId, status, counterId } = payload || {};
     if (!requireRole(socket, ['ADMIN', 'OPERATOR'])) {
-      addLog(`Avvist statusendring for ${ticketId} av ${actorLabel(socket)} (mangler rolle)`, 'ALERT');
+      addLog(`Avvist statusendring for ${cleanText(String(ticketId ?? ''), 40)} av ${actorLabel(socket)} (mangler rolle)`, 'ALERT');
       return;
     }
+    if (!VALID_TICKET_STATUSES.has(status)) return;
+    if (counterId !== undefined && counterId !== null && !state.counters.some(c => c.id === counterId)) return;
     const ticketIndex = state.tickets.findIndex(t => t.id === ticketId);
     if (ticketIndex === -1) return;
 
@@ -1261,18 +1265,14 @@ io.on('connection', (socket) => {
 
     // Update counter currentTicketId if necessary
     if (counterId) {
-       const counterIndex = state.counters.findIndex(c => c.id === counterId);
-       if (counterIndex !== -1) {
-          if (status === 'SERVING') {
-              // If we are serving this ticket, update counter to point to it
-              state.counters[counterIndex].currentTicketId = ticketId;
-              
-              // If there was another ticket being served, complete it? 
-              // (Logic handled by frontend usually, but good to be safe)
-          } else if (status === 'COMPLETED' && state.counters[counterIndex].currentTicketId === ticketId) {
-              state.counters[counterIndex].currentTicketId = undefined;
-          }
-       }
+      const counterIndex = state.counters.findIndex(c => c.id === counterId);
+      if (counterIndex !== -1) {
+        if (status === 'SERVING') {
+          state.counters[counterIndex].currentTicketId = ticketId;
+        } else if (status === 'COMPLETED' && state.counters[counterIndex].currentTicketId === ticketId) {
+          state.counters[counterIndex].currentTicketId = undefined;
+        }
+      }
     }
 
     if (status === 'SERVING') {
@@ -1289,19 +1289,21 @@ io.on('connection', (socket) => {
     addLog(`Statusendring ${ticket.number}: ${oldStatus} -> ${status} av ${actorLabel(socket)}`, 'ACTION');
 
     saveState();
-    io.emit('state-update', state);
+    broadcastState();
   });
 
-  socket.on('delete-ticket', ({ ticketId }) => {
+  socket.on('delete-ticket', (payload) => {
+    const { ticketId } = payload || {};
     if (!requireRole(socket, ['ADMIN', 'OPERATOR'])) {
-      addLog(`Avvist sletting av billett ${ticketId} av ${actorLabel(socket)} (mangler rolle)`, 'ALERT');
+      addLog(`Avvist sletting av billett av ${actorLabel(socket)} (mangler rolle)`, 'ALERT');
       return;
     }
     const ticket = state.tickets.find(t => t.id === ticketId);
+    if (!ticket) return;
     state.tickets = state.tickets.filter(t => t.id !== ticketId);
-    addLog(`Billett slettet manuelt: ${ticket?.number || ticketId} av ${actorLabel(socket)}`, 'ALERT');
+    addLog(`Billett slettet manuelt: ${ticket.number} av ${actorLabel(socket)}`, 'ALERT');
     saveState();
-    io.emit('state-update', state);
+    broadcastState();
   });
 
   socket.on('reset-system', () => {
@@ -1314,202 +1316,259 @@ io.on('connection', (socket) => {
     state.logs = [];
     addLog(`Systemet ble nullstilt av ${actorLabel(socket)}`, 'ALERT');
     saveState();
-    io.emit('state-update', state);
+    broadcastState();
   });
 
   // --- Admin/Config Handlers ---
 
   socket.on('update-settings', (updates) => {
-      if (!requireRole(socket, ['ADMIN'])) {
-        addLog(`Avvist innstillinger fra ${actorLabel(socket)} (mangler rolle)`, 'ALERT');
+    if (!requireRole(socket, ['ADMIN'])) {
+      addLog(`Avvist innstillinger fra ${actorLabel(socket)} (mangler rolle)`, 'ALERT');
+      return;
+    }
+    const actor = actorLabel(socket);
+    const safe = (obj) => (obj && typeof obj === 'object' ? obj : {});
+    const next = safe(updates);
+    const changes = [];
+    const rejectSettings = (error) => {
+      addLog(`Innstillinger avvist for ${actor}: ${error}`, 'ALERT');
+      socket.emit('settings-error', { error });
+    };
+
+    // Validate everything before applying anything, so a bad field cannot leave a half-applied update.
+    let usersUpdate = null;
+    if (Array.isArray(next.users)) {
+      usersUpdate = buildUsersUpdate(next.users);
+      if (usersUpdate.error) {
+        addLog(`Brukeroppdatering avvist: ${actor} (${usersUpdate.error})`, 'ALERT');
+        socket.emit('update-users-error', { error: usersUpdate.error });
         return;
       }
-      const actor = actorLabel(socket);
-      const safe = (obj) => (obj && typeof obj === 'object' ? obj : {});
-      const next = safe(updates);
-      const changes = [];
-      if (Array.isArray(next.services)) {
-        state.services = next.services.map((s) => ({
-          id: s.id || Math.random().toString(36).slice(2, 11),
-          name: cleanText(s.name, 80) || 'Tjeneste',
-          prefix: (cleanText(s.prefix, 2).toUpperCase() || 'X'),
-          color: s.color || 'bg-gray-500',
-          estimatedTimePerPersonMinutes: Number(s.estimatedTimePerPersonMinutes) || 5,
-          isOpen: s.isOpen !== false,
-          priority: Number.isFinite(Number(s.priority)) ? Number(s.priority) : 1,
-        }));
-        changes.push(`tjenester=${state.services.length}`);
+    }
+    let printersUpdate = null;
+    if (Array.isArray(next.printers)) {
+      printersUpdate = buildPrintersUpdate(next.printers);
+      if (printersUpdate.error) return rejectSettings(printersUpdate.error);
+    }
+    let pinHash = null;
+    if (Object.prototype.hasOwnProperty.call(next, 'kioskExitPin')) {
+      const pin = typeof next.kioskExitPin === 'string' ? next.kioskExitPin.trim() : '';
+      if (pin && !/^\d{4,12}$/.test(pin)) return rejectSettings('invalid_pin');
+      pinHash = pin ? hashPassword(pin) : '';
+    }
+    if (next.branding && typeof next.branding.brandLogoUrl === 'string' && !isAllowedLogoUrl(next.branding.brandLogoUrl)) {
+      return rejectSettings('invalid_logo');
+    }
+    const incomingIssuer = next.authProviders?.oidc?.issuerUrl;
+    if (typeof incomingIssuer === 'string' && incomingIssuer.trim() && !/^https?:\/\/[^\s]+$/i.test(incomingIssuer.trim())) {
+      return rejectSettings('invalid_issuer_url');
+    }
+
+    if (Array.isArray(next.services)) {
+      state.services = next.services.filter((s) => s && typeof s === 'object').map((s) => ({
+        id: isSafeId(s.id) ? s.id : randomId(),
+        name: cleanText(s.name, 80) || 'Tjeneste',
+        prefix: (cleanText(s.prefix, 2).toUpperCase() || 'X'),
+        color: typeof s.color === 'string' && /^bg-[a-z]+-\d{3}$/.test(s.color) ? s.color : 'bg-gray-500',
+        estimatedTimePerPersonMinutes: Number(s.estimatedTimePerPersonMinutes) || 5,
+        isOpen: s.isOpen !== false,
+        priority: Number.isFinite(Number(s.priority)) ? Number(s.priority) : 1,
+      }));
+      changes.push(`tjenester=${state.services.length}`);
+    }
+    if (Array.isArray(next.counters)) {
+      state.counters = next.counters.filter((c) => c && typeof c === 'object').map((c) => ({
+        id: isSafeId(c.id) ? c.id : randomId(),
+        name: cleanText(c.name, 80) || 'Skranke',
+        activeServiceIds: Array.isArray(c.activeServiceIds) ? c.activeServiceIds.filter((id) => typeof id === 'string' && id.length > 0) : [],
+        isOnline: c.isOnline !== false,
+        currentTicketId: typeof c.currentTicketId === 'string' ? c.currentTicketId : undefined,
+      }));
+      changes.push(`skranker=${state.counters.length}`);
+    }
+    if (usersUpdate) {
+      state.users = usersUpdate.users;
+      // Sign out removed users and users whose password or role changed (except the acting admin's own session).
+      [...usersUpdate.removedIds, ...usersUpdate.credentialChangedIds].forEach((id) => deleteUserSessions(id, socket.data.sessionKey));
+      changes.push(`brukere=${state.users.length}`);
+    }
+    if (printersUpdate) {
+      state.printers = printersUpdate.printers;
+      changes.push(`skrivere=${state.printers.length}`);
+    }
+    if (next.isClosed !== undefined) state.isClosed = !!next.isClosed;
+    if (next.soundSettings && typeof next.soundSettings === 'object') {
+      const sound = { ...state.soundSettings };
+      SOUND_KEYS.forEach((key) => {
+        if (typeof next.soundSettings[key] === 'boolean') sound[key] = next.soundSettings[key];
+      });
+      state.soundSettings = sound;
+    }
+    if (next.publicMessage !== undefined) state.publicMessage = String(next.publicMessage || '').slice(0, 500);
+    if (next.branding && typeof next.branding === 'object') {
+      const branding = { ...state.branding };
+      if (typeof next.branding.brandText === 'string') branding.brandText = next.branding.brandText.slice(0, 60);
+      if (typeof next.branding.brandLogoUrl === 'string') branding.brandLogoUrl = next.branding.brandLogoUrl;
+      state.branding = branding;
+    }
+    if (pinHash !== null) {
+      state.kioskExitPinHash = pinHash;
+      changes.push('kiosk-pin');
+    }
+    if (next.authProviders && typeof next.authProviders === 'object') {
+      const before = JSON.stringify(state.authProviders);
+      const incomingGoogle = safe(next.authProviders.google);
+      const google = mergeProvider(state.authProviders.google, incomingGoogle);
+      if (Array.isArray(incomingGoogle.allowedDomains)) {
+        google.allowedDomains = incomingGoogle.allowedDomains
+          .filter(d => typeof d === 'string' && d.trim().length > 0)
+          .map(d => d.trim().toLowerCase().slice(0, 253));
       }
-      if (Array.isArray(next.counters)) {
-        state.counters = next.counters.map((c) => ({
-          id: c.id || Math.random().toString(36).slice(2, 11),
-          name: cleanText(c.name, 80) || 'Skranke',
-          activeServiceIds: Array.isArray(c.activeServiceIds) ? c.activeServiceIds.filter((id) => typeof id === 'string' && id.length > 0) : [],
-          isOnline: c.isOnline !== false,
-          currentTicketId: c.currentTicketId,
-        }));
-        changes.push(`skranker=${state.counters.length}`);
-      }
-      if (Array.isArray(next.users)) {
-        const nextUsers = next.users.map((u) => {
-          const existing = state.users.find(x => x.id === u.id);
-          const username = cleanText(u.username || existing?.username || '', 64);
-          const name = cleanText(u.name || username || existing?.name || '', 80);
-          if (!username) {
-            addLog(`Brukeroppdatering avvist: ${actor} mangler brukernavn`, 'ALERT');
-            return null;
-          }
-          let passwordHash = u.passwordHash || existing?.passwordHash || '';
-          if (u.password) {
-            const policy = passwordPolicy(u.password);
-            if (!policy.ok) {
-              addLog(`Brukeroppdatering avvist: ${actor} brøt passordpolicy (${policy.error}) for ${u.username || u.name || 'ukjent'}`, 'ALERT');
-              socket.emit('update-users-error', { error: policy.error });
-              return null;
-            }
-            passwordHash = hashPassword(u.password);
-          }
-          const { password, ...rest } = u;
-          return {
-            ...rest,
-            id: u.id || Math.random().toString(36).slice(2, 11),
-            passwordHash: passwordHash || hashPassword('Changeme1'),
-            role: u.role === 'ADMIN' ? 'ADMIN' : 'OPERATOR',
-            username: username,
-            name: name || username,
-          };
-        });
-        const sanitizedUsers = nextUsers.filter(Boolean);
-        const adminCount = sanitizedUsers.filter(u => u.role === 'ADMIN').length;
-        if (adminCount < 1) {
-          addLog(`Brukeroppdatering avvist: ${actor} ville fjernet siste admin`, 'ALERT');
-          socket.emit('update-users-error', { error: 'must_have_admin' });
-          return;
-        }
-        if (sanitizedUsers.length !== nextUsers.length) {
-          addLog(`Brukeroppdatering avvist: ${actor} har ugyldige brukere i payload`, 'ALERT');
-          return; // abort update; client already notified
-        }
-        state.users = sanitizedUsers;
-        changes.push(`brukere=${state.users.length}`);
-      }
-      if (Array.isArray(next.printers)) {
-        state.printers = next.printers.map(p => ({
-          ...p,
-          status: p.status || 'OFFLINE',
-          port: Number(p.port) || 9100,
-          type: p.type === 'GENERIC_NETWORK' ? 'GENERIC_NETWORK' : 'EPSON_IP',
-        }));
-        changes.push(`skrivere=${state.printers.length}`);
-      }
-      if (next.isClosed !== undefined) state.isClosed = !!next.isClosed;
-      if (next.soundSettings) {
-        state.soundSettings = { ...state.soundSettings, ...safe(next.soundSettings) };
-      }
-      if (next.publicMessage !== undefined) state.publicMessage = String(next.publicMessage || '');
-      if (next.branding) {
-        state.branding = { ...state.branding, ...safe(next.branding) };
-      }
-      if (Object.prototype.hasOwnProperty.call(next, 'kioskExitPin')) {
-        state.kioskExitPin = String(next.kioskExitPin || '');
-      }
-      if (next.authProviders) {
-        // Update auth provider configuration
-        if (next.authProviders.google) {
-          state.authProviders.google = { 
-            ...state.authProviders.google, 
-            ...safe(next.authProviders.google),
-            allowedDomains: Array.isArray(next.authProviders.google.allowedDomains) 
-              ? next.authProviders.google.allowedDomains.filter(d => typeof d === 'string' && d.trim().length > 0)
-              : state.authProviders.google.allowedDomains
-          };
-        }
-        if (next.authProviders.oidc) {
-          state.authProviders.oidc = { 
-            ...state.authProviders.oidc, 
-            ...safe(next.authProviders.oidc) 
-          };
-        }
+      const incomingOidc = safe(next.authProviders.oidc);
+      const oidc = mergeProvider(state.authProviders.oidc, incomingOidc, ['requireVerifiedEmail']);
+      if (typeof incomingOidc.issuerUrl === 'string') oidc.issuerUrl = incomingOidc.issuerUrl.trim();
+      state.authProviders = { ...state.authProviders, google, oidc };
+      if (JSON.stringify(state.authProviders) !== before) {
         // Reinitialize passport with new configuration
         initializePassport(state, createSession, addLog);
         changes.push('auth-providers');
       }
+    }
 
-      saveState();
-      io.emit('state-update', state);
-      addLog(`Innstillinger oppdatert av ${actor}${changes.length ? ` (${changes.join(', ')})` : ''}`, 'ACTION');
+    saveState();
+    if (usersUpdate) refreshAllSockets();
+    broadcastState();
+    addLog(`Innstillinger oppdatert av ${actor}${changes.length ? ` (${changes.join(', ')})` : ''}`, 'ACTION');
   });
 
-  socket.on('register-kiosk', (kioskData) => {
-      const existingIdx = state.kiosks.findIndex(k => k.id === kioskData.id);
-      const rememberedPrinter = state.kioskPrinterAssignments[kioskData.id];
-      if (existingIdx !== -1) {
-        const existing = state.kiosks[existingIdx];
-        const withAssignment = !existing.assignedPrinterId && rememberedPrinter
-        ? { ...existing, assignedPrinterId: rememberedPrinter }
-        : existing;
-        state.kiosks[existingIdx] = { ...withAssignment, lastSeen: Date.now() };
-        if (withAssignment !== existing) {
-          saveState();
-          io.emit('state-update', state);
-        }
-      } else {
-        state.kiosks.push({ ...kioskData, lastSeen: Date.now(), assignedPrinterId: rememberedPrinter });
-          addLog(`Ny Kiosk registrert: ${kioskData.name}`, 'INFO');
-      }
-      // Don't save kiosk heartbeat to disk every few seconds to save IO
-      // But broadcast it so Admin sees it
-      io.emit('state-update', state); 
+  // --- Kiosk devices ---
+
+  // An admin turns the current browser into a kiosk. The kiosk gets its own device token,
+  // so no admin session has to stay on a public device.
+  socket.on('activate-kiosk', (payload, ack) => {
+    const reply = typeof ack === 'function' ? ack : () => {};
+    if (!requireRole(socket, ['ADMIN'])) {
+      addLog(`Avvist kioskaktivering av ${actorLabel(socket)} (mangler rolle)`, 'ALERT');
+      return reply({ ok: false, error: 'unauthorized' });
+    }
+    const requested = payload?.kioskId;
+    const kioskId = typeof requested === 'string' && /^kiosk_[a-z0-9]{4,32}$/.test(requested) ? requested : `kiosk_${randomId()}`;
+    const name = cleanText(payload?.name, 80) || `Kiosk ${kioskId.slice(-4).toUpperCase()}`;
+    revokeKioskDevices(kioskId);
+    const deviceToken = generateToken(32);
+    state.devices[hashToken(deviceToken)] = { kioskId, name, createdAt: Date.now(), createdBy: socket.data.userId };
+    saveState();
+    addLog(`Kiosk ${name} (${kioskId}) aktivert av ${actorLabel(socket)}`, 'ACTION');
+    reply({ ok: true, deviceToken, kioskId });
+  });
+
+  socket.on('register-kiosk', () => {
+    refreshSocket(socket);
+    const kioskId = socket.data.kioskId;
+    if (!kioskId) return;
+    const device = getDevice(socket.data.deviceToken);
+    const name = device?.name || `Kiosk ${kioskId.slice(-4).toUpperCase()}`;
+    const rememberedPrinter = state.kioskPrinterAssignments[kioskId];
+    const existingIdx = state.kiosks.findIndex(k => k.id === kioskId);
+    if (existingIdx !== -1) {
+      const existing = state.kiosks[existingIdx];
+      state.kiosks[existingIdx] = {
+        ...existing,
+        name,
+        assignedPrinterId: existing.assignedPrinterId || rememberedPrinter,
+        lastSeen: Date.now(),
+      };
+    } else {
+      if (state.kiosks.length >= MAX_KIOSKS) return;
+      state.kiosks.push({ id: kioskId, name, lastSeen: Date.now(), assignedPrinterId: rememberedPrinter });
+      addLog(`Kiosk online: ${name}`, 'INFO');
+    }
+    // Heartbeats are not persisted to save IO; only staff see kiosk status.
+    broadcastStaffState();
+  });
+
+  socket.on('verify-kiosk-pin', (payload, ack) => {
+    const reply = typeof ack === 'function' ? ack : () => {};
+    refreshSocket(socket);
+    const kioskId = socket.data.kioskId;
+    if (!kioskId) return reply({ ok: false, error: 'not_a_kiosk' });
+    if (!kioskPinAttempts.hit(kioskId)) {
+      addLog(`For mange PIN-forsøk på kiosk ${kioskId}`, 'ALERT');
+      return reply({ ok: false, error: 'rate_limited' });
+    }
+    const pin = typeof payload?.pin === 'string' ? payload.pin.trim() : '';
+    if (!state.kioskExitPinHash || !verifyPassword(pin, state.kioskExitPinHash)) {
+      addLog(`Feil PIN ved avslutning av kiosk ${kioskId}`, 'ALERT');
+      return reply({ ok: false, error: state.kioskExitPinHash ? 'invalid_pin' : 'pin_not_set' });
+    }
+    kioskPinAttempts.reset(kioskId);
+    // Leaving kiosk mode deactivates the device; an admin has to activate it again.
+    revokeKioskDevices(kioskId);
+    state.kiosks = state.kiosks.filter(k => k.id !== kioskId);
+    saveState();
+    addLog(`Kiosk ${kioskId} avsluttet med PIN`, 'ACTION');
+    reply({ ok: true });
+    refreshAllSockets();
+    broadcastStaffState();
   });
 
   socket.on('register-counter-display', (payload) => {
-    const { id, name, counterId, message } = payload || {};
-    if (!id || !name) return;
+    const { id, name, counterId } = payload || {};
+    if (!isSafeId(id)) return;
+    const displayName = cleanText(name, 80);
+    if (!displayName) return;
     const idx = state.counterDisplays.findIndex(d => d.id === id);
     const now = Date.now();
     if (idx !== -1) {
-      const existing = state.counterDisplays[idx];
-      const nextCounterId = counterId !== undefined ? counterId : existing.counterId; // preserve assignment if not provided
-      const nextMessage = message !== undefined ? message : existing.message;
-      state.counterDisplays[idx] = { ...existing, name, counterId: nextCounterId, message: nextMessage, lastSeen: now };
-      saveState();
-    } else {
-      state.counterDisplays.push({ id, name, counterId, message: message || '', lastSeen: now });
-      addLog(`Ny skrankeskjerm: ${name}`, 'INFO');
-      saveState();
-    }
-    io.emit('state-update', state);
-  });
-
-  socket.on('assign-counter-display', ({ displayId, counterId }) => {
-    if (!requireRole(socket, ['ADMIN'])) {
-      addLog(`Avvist kobling av skrankeskjerm ${displayId} av ${actorLabel(socket)} (mangler rolle)`, 'ALERT');
+      // Heartbeat: assignment and message are controlled from the admin panel only.
+      state.counterDisplays[idx] = { ...state.counterDisplays[idx], name: displayName, lastSeen: now };
+      broadcastStaffState();
       return;
     }
-    const idx = state.counterDisplays.findIndex(d => d.id === displayId);
-    if (idx === -1) return;
-    state.counterDisplays[idx] = { ...state.counterDisplays[idx], counterId, lastSeen: Date.now() };
+    if (state.counterDisplays.length >= MAX_COUNTER_DISPLAYS || !counterDisplayRegistrations.hit(socket.data.ip)) {
+      addLog(`Ny skrankeskjerm avvist fra ${socket.data.ip} (grense nådd)`, 'ALERT');
+      return;
+    }
+    const validCounterId = typeof counterId === 'string' && state.counters.some(c => c.id === counterId) ? counterId : undefined;
+    state.counterDisplays.push({ id, name: displayName, counterId: validCounterId, message: '', lastSeen: now });
+    addLog(`Ny skrankeskjerm: ${displayName}`, 'INFO');
     saveState();
-    addLog(`Skrankeskjerm ${displayId} koblet til skranke ${counterId || 'ingen'} av ${actorLabel(socket)}`, 'ACTION');
-    io.emit('state-update', state);
+    broadcastState();
   });
 
-  socket.on('set-counter-display-message', ({ displayId, message }) => {
+  socket.on('assign-counter-display', (payload) => {
+    const { displayId, counterId } = payload || {};
     if (!requireRole(socket, ['ADMIN'])) {
-      addLog(`Avvist endring av skjermmelding for ${displayId} av ${actorLabel(socket)} (mangler rolle)`, 'ALERT');
+      addLog(`Avvist kobling av skrankeskjerm av ${actorLabel(socket)} (mangler rolle)`, 'ALERT');
       return;
     }
     const idx = state.counterDisplays.findIndex(d => d.id === displayId);
     if (idx === -1) return;
-    state.counterDisplays[idx] = { ...state.counterDisplays[idx], message: message || '', lastSeen: Date.now() };
+    const validCounterId = typeof counterId === 'string' && state.counters.some(c => c.id === counterId) ? counterId : undefined;
+    state.counterDisplays[idx] = { ...state.counterDisplays[idx], counterId: validCounterId, lastSeen: Date.now() };
+    saveState();
+    addLog(`Skrankeskjerm ${displayId} koblet til skranke ${validCounterId || 'ingen'} av ${actorLabel(socket)}`, 'ACTION');
+    broadcastState();
+  });
+
+  socket.on('set-counter-display-message', (payload) => {
+    const { displayId, message } = payload || {};
+    if (!requireRole(socket, ['ADMIN'])) {
+      addLog(`Avvist endring av skjermmelding av ${actorLabel(socket)} (mangler rolle)`, 'ALERT');
+      return;
+    }
+    const idx = state.counterDisplays.findIndex(d => d.id === displayId);
+    if (idx === -1) return;
+    state.counterDisplays[idx] = { ...state.counterDisplays[idx], message: typeof message === 'string' ? message.slice(0, 300) : '', lastSeen: Date.now() };
     saveState();
     addLog(`Oppdatert melding for skrankeskjerm ${displayId} av ${actorLabel(socket)}`, 'ACTION');
-    io.emit('state-update', state);
+    broadcastState();
   });
 
-  socket.on('delete-counter-display', ({ displayId }) => {
+  socket.on('delete-counter-display', (payload) => {
+    const { displayId } = payload || {};
     if (!requireRole(socket, ['ADMIN'])) {
-      addLog(`Avvist fjerning av skrankeskjerm ${displayId} av ${actorLabel(socket)} (mangler rolle)`, 'ALERT');
+      addLog(`Avvist fjerning av skrankeskjerm av ${actorLabel(socket)} (mangler rolle)`, 'ALERT');
       return;
     }
     const before = state.counterDisplays.length;
@@ -1517,75 +1576,81 @@ io.on('connection', (socket) => {
     if (state.counterDisplays.length !== before) {
       addLog(`Skrankeskjerm fjernet: ${displayId} av ${actorLabel(socket)}`, 'ACTION');
       saveState();
-      io.emit('state-update', state);
+      broadcastState();
     }
   });
-  
-  socket.on('assign-printer', ({ kioskId, printerId }) => {
-      if (!requireRole(socket, ['ADMIN'])) {
-        addLog(`Avvist skriver-tilkobling for kiosk ${kioskId} av ${actorLabel(socket)} (mangler rolle)`, 'ALERT');
-        return;
-      }
-      // Persist mapping even if kiosk is currently offline/removed
-      state.kioskPrinterAssignments[kioskId] = printerId;
 
-      const kIndex = state.kiosks.findIndex(k => k.id === kioskId);
-      if (kIndex !== -1) {
-          state.kiosks[kIndex].assignedPrinterId = printerId;
-      }
-      saveState();
-      addLog(`Skriver ${printerId || 'ukjent'} tilordnet kiosk ${kioskId} av ${actorLabel(socket)}`, 'ACTION');
-      io.emit('state-update', state);
+  socket.on('assign-printer', (payload) => {
+    const { kioskId, printerId } = payload || {};
+    if (!requireRole(socket, ['ADMIN'])) {
+      addLog(`Avvist skriver-tilkobling av ${actorLabel(socket)} (mangler rolle)`, 'ALERT');
+      return;
+    }
+    if (!isSafeId(kioskId)) return;
+    if (printerId && !state.printers.some(p => p.id === printerId)) return;
+    // Persist mapping even if kiosk is currently offline/removed
+    state.kioskPrinterAssignments[kioskId] = printerId || undefined;
+
+    const kIndex = state.kiosks.findIndex(k => k.id === kioskId);
+    if (kIndex !== -1) {
+      state.kiosks[kIndex].assignedPrinterId = printerId || undefined;
+    }
+    saveState();
+    addLog(`Skriver ${printerId || 'ingen'} tilordnet kiosk ${kioskId} av ${actorLabel(socket)}`, 'ACTION');
+    broadcastStaffState();
   });
 
-      socket.on('play-sound', (payload) => {
-        if (!requireRole(socket, ['ADMIN', 'OPERATOR'])) {
-          addLog(`Avvist lydkommando av ${actorLabel(socket)} (mangler rolle)`, 'ALERT');
-          return;
-        }
-        // Broadcast play-sound requests (e.g., manual call-again)
-        addLog(`Lydkommando trigget av ${actorLabel(socket)} (${payload?.type || 'ukjent'})`, 'INFO');
-        io.emit('play-sound', payload);
-      });
-
-    socket.on('delete-kiosk', ({ kioskId }) => {
-      if (!requireRole(socket, ['ADMIN'])) {
-        addLog(`Avvist fjerning av kiosk ${kioskId} av ${actorLabel(socket)} (mangler rolle)`, 'ALERT');
-        return;
-      }
-      const before = state.kiosks.length;
-      state.kiosks = state.kiosks.filter(k => k.id !== kioskId);
-      if (state.kiosks.length !== before) {
-        addLog(`Kiosk fjernet: ${kioskId} av ${actorLabel(socket)}`, 'ACTION');
-        saveState();
-        io.emit('state-update', state);
-      }
+  socket.on('play-sound', (payload) => {
+    if (!requireRole(socket, ['ADMIN', 'OPERATOR'])) {
+      addLog(`Avvist lydkommando av ${actorLabel(socket)} (mangler rolle)`, 'ALERT');
+      return;
+    }
+    const type = ['ding', 'print', 'alert'].includes(payload?.type) ? payload.type : 'ding';
+    const sound = { type };
+    ['text', 'textNo', 'textEn'].forEach((key) => {
+      if (typeof payload?.[key] === 'string') sound[key] = cleanText(payload[key], 200);
     });
+    // Broadcast play-sound requests (e.g., manual call-again)
+    addLog(`Lydkommando trigget av ${actorLabel(socket)} (${type})`, 'INFO');
+    io.emit('play-sound', sound);
+  });
 
+  socket.on('delete-kiosk', (payload) => {
+    const { kioskId } = payload || {};
+    if (!requireRole(socket, ['ADMIN'])) {
+      addLog(`Avvist fjerning av kiosk av ${actorLabel(socket)} (mangler rolle)`, 'ALERT');
+      return;
+    }
+    const before = state.kiosks.length;
+    state.kiosks = state.kiosks.filter(k => k.id !== kioskId);
+    const revoked = revokeKioskDevices(kioskId);
+    if (state.kiosks.length !== before || revoked > 0) {
+      addLog(`Kiosk fjernet: ${kioskId} av ${actorLabel(socket)}${revoked ? ' (enheten er deaktivert)' : ''}`, 'ACTION');
+      saveState();
+      refreshAllSockets();
+      broadcastStaffState();
+    }
+  });
 });
 
-  // Health endpoint for monitoring
-  app.get('/health', (req, res) => {
-    res.json({
-      status: 'ok',
-      services: state.services?.length || 0,
-      counters: state.counters?.length || 0,
-      tickets: state.tickets?.length || 0,
-      kiosks: state.kiosks?.length || 0,
-      printers: state.printers?.length || 0,
-      isClosed: !!state.isClosed,
-    });
+// Health endpoint for monitoring
+app.get('/health', (req, res) => {
+  res.json({
+    status: 'ok',
+    services: state.services?.length || 0,
+    counters: state.counters?.length || 0,
+    tickets: state.tickets?.length || 0,
+    kiosks: state.kiosks?.length || 0,
+    printers: state.printers?.length || 0,
+    isClosed: !!state.isClosed,
   });
+});
 
-// Admin-triggered backup (requires Bearer token for ADMIN)
-app.post('/api/admin/backup', requireAllowedIP, (req, res) => {
-  const auth = req.headers.authorization || '';
-  const token = auth.startsWith('Bearer ') ? auth.slice(7) : null;
-  const session = getSession(token);
-  if (!session?.user || session.user.role !== 'ADMIN') return res.status(401).json({ error: 'unauthorized' });
+// Admin-triggered backup
+app.post('/api/admin/backup', requireAllowedIP, requireAuth(['ADMIN']), (req, res) => {
   try {
     const file = backupDatabase();
-    addLog(`Backup created at ${file}`, 'ACTION');
+    addLog(`Backup opprettet: ${file} av ${req.auth.user.username}`, 'ACTION');
     return res.json({ ok: true, file });
   } catch (err) {
     console.error('Backup failed', err);
@@ -1593,14 +1658,10 @@ app.post('/api/admin/backup', requireAllowedIP, (req, res) => {
   }
 });
 
-app.get('/api/admin/backups', requireAllowedIP, (req, res) => {
-  const auth = req.headers.authorization || '';
-  const token = auth.startsWith('Bearer ') ? auth.slice(7) : null;
-  const session = getSession(token);
-  if (!session?.user || session.user.role !== 'ADMIN') return res.status(401).json({ error: 'unauthorized' });
+app.get('/api/admin/backups', requireAllowedIP, requireAuth(['ADMIN']), (req, res) => {
   try {
     const items = listBackups();
-    addLog(`Backup-liste hentet av ${session.user.username}`, 'INFO');
+    addLog(`Backup-liste hentet av ${req.auth.user.username}`, 'INFO');
     return res.json({ ok: true, backups: items });
   } catch (err) {
     console.error('List backups failed', err);
@@ -1608,21 +1669,16 @@ app.get('/api/admin/backups', requireAllowedIP, (req, res) => {
   }
 });
 
-app.get('/api/admin/backup/:file', requireAllowedIP, (req, res) => {
-  const auth = req.headers.authorization || '';
-  const token = auth.startsWith('Bearer ') ? auth.slice(7) : null;
-  const session = getSession(token);
-  if (!session?.user || session.user.role !== 'ADMIN') return res.status(401).json({ error: 'unauthorized' });
-
+app.get('/api/admin/backup/:file', requireAllowedIP, requireAuth(['ADMIN']), (req, res) => {
   const requested = req.params.file || '';
-  if (!requested.endsWith('.db') || requested.includes('..') || requested.includes('/') || requested.includes('\\')) {
+  if (!/^[A-Za-z0-9._-]+\.db$/.test(requested) || requested.includes('..')) {
     return res.status(400).json({ error: 'invalid_file' });
   }
 
   const target = join(BACKUP_DIR, requested);
   if (!target.startsWith(BACKUP_DIR)) return res.status(400).json({ error: 'invalid_path' });
   if (!fs.existsSync(target)) return res.status(404).json({ error: 'not_found' });
-  addLog(`Backup lastet ned: ${requested} av ${session.user.username}`, 'ACTION');
+  addLog(`Backup lastet ned: ${requested} av ${req.auth.user.username}`, 'ACTION');
   return res.download(target, requested);
 });
 

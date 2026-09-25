@@ -27,3 +27,7 @@ playwright-report/
 *.njsproj
 *.sln
 *.sw?
+
+# Local data (never commit: contains users, sessions and settings)
+db.json
+.ci-data/

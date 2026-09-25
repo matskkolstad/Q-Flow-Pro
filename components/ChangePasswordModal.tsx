@@ -59,6 +59,8 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({
         const data = await res.json();
         if (data.error === 'invalid_old_password') {
           setError('Gammelt passord er feil');
+        } else if (data.error === 'password_unchanged') {
+          setError('Det nye passordet må være forskjellig fra det gamle');
         } else if (data.error === 'password_too_short') {
           setError('Passordet må være minst 8 tegn');
         } else if (data.error === 'password_needs_upper_lower_digit') {

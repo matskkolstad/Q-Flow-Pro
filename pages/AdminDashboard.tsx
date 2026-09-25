@@ -12,7 +12,7 @@ type ViewTab = 'dashboard' | 'logs' | 'settings';
 
 const AdminDashboard: React.FC = () => {
           const { 
-                    counters, tickets, logs, users, services, printers, kiosks, counterDisplays, isClosed, publicMessage, soundSettings, branding, kioskExitPin, authProviders, setPublicMessage, setSoundSettings, setBranding, setKioskExitPin, setAuthProviders, setSystemClosed, triggerSound, reportError,
+                    counters, tickets, logs, users, services, printers, kiosks, counterDisplays, isClosed, publicMessage, soundSettings, branding, kioskExitPinSet, authProviders, setPublicMessage, setSoundSettings, setBranding, setKioskExitPin, setAuthProviders, setSystemClosed, triggerSound, reportError,
                 callNextTicket, callSpecificTicket, updateTicketStatus, deleteTicket,
         addService, updateService, removeService, addCounter, removeCounter, updateCounter, addUser, updateUser, removeUser,
             addPrinter, removePrinter, assignPrinterToKiosk, removeKiosk, assignCounterDisplay, setCounterDisplayMessage, removeCounterDisplay,
@@ -47,7 +47,11 @@ const AdminDashboard: React.FC = () => {
 
   // Form States
     const [newService, setNewService] = useState<Omit<Service, 'id'>>({ name: '', prefix: '', color: 'bg-gray-500', estimatedTimePerPersonMinutes: 5, priority: 1, isOpen: true });
-    const [newUser, setNewUser] = useState<{ name: string; username: string; role: 'ADMIN' | 'OPERATOR'; password: string }>({ name: '', username: '', role: 'OPERATOR', password: '' });
+    const [newUser, setNewUser] = useState<{ name: string; username: string; role: 'ADMIN' | 'OPERATOR'; password: string; mustChangePassword: boolean }>({ name: '', username: '', role: 'OPERATOR', password: '', mustChangePassword: true });
+    const [pinDraft, setPinDraft] = useState('');
+    const [pinSaved, setPinSaved] = useState(false);
+    // OAuth client secrets are write-only: typed here and sent once, never received from the server.
+    const [secretDrafts, setSecretDrafts] = useState<{ google: string; oidc: string }>({ google: '', oidc: '' });
   const [newCounterName, setNewCounterName] = useState('');
   const [newPrinter, setNewPrinter] = useState<Omit<Printer, 'id' | 'status'>>({ name: '', ipAddress: '', port: 9100, type: 'EPSON_IP' });
     const [counterDisplayMessages, setCounterDisplayMessages] = useState<Record<string, string>>({});
@@ -134,9 +138,10 @@ const AdminDashboard: React.FC = () => {
                 username: newUser.username,
                 role: newUser.role,
                 password: newUser.password,
+                mustChangePassword: newUser.mustChangePassword,
             };
             addUser(payload);
-            setNewUser({ name: '', username: '', role: 'OPERATOR', password: '' });
+            setNewUser({ name: '', username: '', role: 'OPERATOR', password: '', mustChangePassword: true });
     };
 
   const handleCreateCounter = () => {
@@ -210,8 +215,23 @@ const AdminDashboard: React.FC = () => {
         setBranding({ brandLogoUrl: '' });
     };
 
-    const handleKioskPinChange = (pin: string) => {
+    const handleKioskPinSave = () => {
+        const pin = pinDraft.trim();
+        if (pin && !/^\d{4,12}$/.test(pin)) {
+            reportError(t('admin.general.pin.invalid'));
+            return;
+        }
         setKioskExitPin(pin);
+        setPinDraft('');
+        setPinSaved(true);
+        setTimeout(() => setPinSaved(false), 2500);
+    };
+
+    const handleSecretSave = (provider: 'google' | 'oidc') => {
+        const secret = secretDrafts[provider].trim();
+        if (!secret) return;
+        setAuthProviders({ [provider]: { ...authProviders[provider], clientSecret: secret } });
+        setSecretDrafts(prev => ({ ...prev, [provider]: '' }));
     };
 
     const handleCounterDisplayMessageChange = (displayId: string, value: string) => {
@@ -809,13 +829,24 @@ const AdminDashboard: React.FC = () => {
                                 <div className="bg-white border-2 border-gray-100 rounded-2xl p-6">
                                     <h4 className="font-bold text-gray-900 mb-2 text-lg">{t('admin.general.pin.title')}</h4>
                                     <p className="text-sm text-gray-600 mb-4">{t('admin.general.pin.desc')}</p>
-                                    <input
-                                        type="password"
-                                        value={kioskExitPin}
-                                        onChange={(e) => handleKioskPinChange(e.target.value)}
-                                        className="w-full bg-white border-2 border-gray-200 rounded-xl px-4 py-3 focus:ring-4 focus:ring-indigo-100 focus:border-indigo-500 outline-none font-mono text-gray-900"
-                                        placeholder={t('admin.general.pin.placeholder')}
-                                    />
+                                    <div className="flex gap-3">
+                                        <input
+                                            type="password"
+                                            inputMode="numeric"
+                                            autoComplete="new-password"
+                                            value={pinDraft}
+                                            onChange={(e) => setPinDraft(e.target.value)}
+                                            onKeyDown={(e) => { if (e.key === 'Enter') handleKioskPinSave(); }}
+                                            className="flex-1 bg-white border-2 border-gray-200 rounded-xl px-4 py-3 focus:ring-4 focus:ring-indigo-100 focus:border-indigo-500 outline-none font-mono text-gray-900"
+                                            placeholder={t('admin.general.pin.placeholder')}
+                                        />
+                                        <button onClick={handleKioskPinSave} disabled={!pinDraft.trim()} className="px-5 py-2.5 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 disabled:opacity-60">
+                                            {t('admin.general.pin.save')}
+                                        </button>
+                                    </div>
+                                    <p className={`text-xs mt-2 font-medium ${kioskExitPinSet ? 'text-gray-500' : 'text-amber-700'}`}>
+                                        {pinSaved ? t('admin.general.pin.saved') : kioskExitPinSet ? t('admin.general.pin.set') : t('admin.general.pin.notSet')}
+                                    </p>
                                 </div>
                                 <div className="bg-white border-2 border-gray-100 rounded-2xl p-6">
                                     <h4 className="font-bold text-gray-900 mb-2 text-lg">{t('admin.general.backup.title')}</h4>
@@ -901,13 +932,27 @@ const AdminDashboard: React.FC = () => {
                                                 </div>
                                                 <div>
                                                     <label className="block text-sm font-bold text-gray-700 mb-1">Client Secret</label>
-                                                    <input
-                                                        type="password"
-                                                        value={authProviders.google.clientSecret}
-                                                        onChange={(e) => setAuthProviders({ google: { ...authProviders.google, clientSecret: e.target.value } })}
-                                                        className="w-full bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
-                                                        placeholder="GOCSPX-..."
-                                                    />
+                                                    <div className="flex gap-2">
+                                                        <input
+                                                            type="password"
+                                                            autoComplete="new-password"
+                                                            value={secretDrafts.google}
+                                                            onChange={(e) => setSecretDrafts(prev => ({ ...prev, google: e.target.value }))}
+                                                            className="flex-1 bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                                                            placeholder={authProviders.google.clientSecretSet ? '•••••••• (lagret / saved)' : 'GOCSPX-...'}
+                                                        />
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => handleSecretSave('google')}
+                                                            disabled={!secretDrafts.google.trim()}
+                                                            className="px-3 py-2 bg-indigo-600 text-white text-sm font-bold rounded-lg hover:bg-indigo-700 disabled:opacity-60"
+                                                        >
+                                                            Lagre / Save
+                                                        </button>
+                                                    </div>
+                                                    <p className="text-xs text-gray-500 mt-1">
+                                                        {authProviders.google.clientSecretSet ? 'En hemmelighet er lagret. Skriv inn en ny for å erstatte den.' : 'Ingen hemmelighet lagret ennå.'}
+                                                    </p>
                                                 </div>
                                                 <div>
                                                     <label className="block text-sm font-bold text-gray-700 mb-1">
@@ -999,13 +1044,27 @@ const AdminDashboard: React.FC = () => {
                                                 </div>
                                                 <div>
                                                     <label className="block text-sm font-bold text-gray-700 mb-1">Client Secret</label>
-                                                    <input
-                                                        type="password"
-                                                        value={authProviders.oidc.clientSecret}
-                                                        onChange={(e) => setAuthProviders({ oidc: { ...authProviders.oidc, clientSecret: e.target.value } })}
-                                                        className="w-full bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
-                                                        placeholder="client-secret"
-                                                    />
+                                                    <div className="flex gap-2">
+                                                        <input
+                                                            type="password"
+                                                            autoComplete="new-password"
+                                                            value={secretDrafts.oidc}
+                                                            onChange={(e) => setSecretDrafts(prev => ({ ...prev, oidc: e.target.value }))}
+                                                            className="flex-1 bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                                                            placeholder={authProviders.oidc.clientSecretSet ? '•••••••• (lagret / saved)' : 'client-secret'}
+                                                        />
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => handleSecretSave('oidc')}
+                                                            disabled={!secretDrafts.oidc.trim()}
+                                                            className="px-3 py-2 bg-indigo-600 text-white text-sm font-bold rounded-lg hover:bg-indigo-700 disabled:opacity-60"
+                                                        >
+                                                            Lagre / Save
+                                                        </button>
+                                                    </div>
+                                                    <p className="text-xs text-gray-500 mt-1">
+                                                        {authProviders.oidc.clientSecretSet ? 'En hemmelighet er lagret. Skriv inn en ny for å erstatte den.' : 'Ingen hemmelighet lagret ennå.'}
+                                                    </p>
                                                 </div>
                                                 <div className="flex items-center gap-4">
                                                     <label className="flex items-center gap-2">
@@ -1027,6 +1086,18 @@ const AdminDashboard: React.FC = () => {
                                                         </select>
                                                     )}
                                                 </div>
+                                                <label className="flex items-start gap-2">
+                                                    <input
+                                                        type="checkbox"
+                                                        className="mt-1"
+                                                        checked={authProviders.oidc.requireVerifiedEmail !== false}
+                                                        onChange={(e) => setAuthProviders({ oidc: { ...authProviders.oidc, requireVerifiedEmail: e.target.checked } })}
+                                                    />
+                                                    <span className="text-sm text-gray-700">
+                                                        <span className="font-bold">Krev verifisert e-post (anbefalt)</span><br />
+                                                        <span className="text-xs text-gray-500">Kontoer kobles/opprettes via e-post bare når leverandøren har verifisert adressen (email_verified). Slå av kun hvis leverandøren din (f.eks. Entra ID) ikke sender dette feltet og du stoler på alle e-postadresser der.</span>
+                                                    </span>
+                                                </label>
                                             </div>
                                         )}
                                     </div>
@@ -1210,7 +1281,11 @@ const AdminDashboard: React.FC = () => {
                                 </div>
                                 <div>
                                     <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">{t('admin.users.password')}</label>
-                                    <input type="password" value={newUser.password} onChange={e => setNewUser({...newUser, password: e.target.value})} className="w-full border-2 border-gray-200 rounded-xl px-4 py-2.5 bg-white font-bold focus:border-indigo-500 outline-none" placeholder={t('admin.users.setPasswordPlaceholder')} />
+                                    <input type="password" autoComplete="new-password" value={newUser.password} onChange={e => setNewUser({...newUser, password: e.target.value})} className="w-full border-2 border-gray-200 rounded-xl px-4 py-2.5 bg-white font-bold focus:border-indigo-500 outline-none" placeholder={t('admin.users.setPasswordPlaceholder')} />
+                                    <label className="flex items-center gap-2 mt-2 text-xs font-bold text-gray-600">
+                                        <input type="checkbox" checked={newUser.mustChangePassword} onChange={e => setNewUser({...newUser, mustChangePassword: e.target.checked})} />
+                                        {t('admin.users.mustChange')}
+                                    </label>
                                 </div>
                                 <button onClick={handleCreateUser} className="bg-indigo-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-indigo-700 shadow-md h-[46px] disabled:opacity-60" disabled={!newUser.username || !newUser.password}>
                                     {t('admin.users.add')}

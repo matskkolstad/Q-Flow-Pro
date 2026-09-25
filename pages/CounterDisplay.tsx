@@ -9,7 +9,7 @@ import { useI18n } from '../context/I18nContext';
 const COUNTER_DISPLAY_HEARTBEAT_MS = 10_000;
 
 const CounterDisplay: React.FC = () => {
-  const { counters, tickets, counterDisplays, isClosed, registerCounterDisplay, assignCounterDisplay, branding } = useQueue();
+  const { counters, tickets, counterDisplays, isClosed, registerCounterDisplay, branding } = useQueue();
   const { t } = useI18n();
   const location = useLocation();
   const searchParams = useMemo(() => new URLSearchParams(location.search), [location.search]);
@@ -48,26 +48,18 @@ const CounterDisplay: React.FC = () => {
   // Counter assignment is controlled from admin; this screen reads assignment from server state
   const myDisplay = counterDisplays.find(d => d.id === displayId);
   const assignedCounterId = myDisplay?.counterId;
-  const counterAssignmentPendingRef = useRef(false);
 
   // Register heartbeat
   useEffect(() => {
     if (!displayId) return;
-    registerCounterDisplay(displayId, displayName, assignedCounterId);
+    // A ?counterId= in the URL is only used when the display registers for the first time;
+    // after that the assignment is managed from the admin panel.
+    registerCounterDisplay(displayId, displayName, assignedCounterId ?? paramCounterId);
     const interval = setInterval(() => {
-      registerCounterDisplay(displayId, displayName, assignedCounterId);
+      registerCounterDisplay(displayId, displayName, assignedCounterId ?? paramCounterId);
     }, COUNTER_DISPLAY_HEARTBEAT_MS);
     return () => clearInterval(interval);
-  }, [displayId, displayName, assignedCounterId, registerCounterDisplay]);
-
-  // Optional: if URL provides counterId and none is assigned yet, bind once
-  useEffect(() => {
-    if (!displayId || !paramCounterId) return;
-    if (assignedCounterId) return;
-    if (counterAssignmentPendingRef.current) return;
-    counterAssignmentPendingRef.current = true;
-    assignCounterDisplay(displayId, paramCounterId);
-  }, [displayId, paramCounterId, assignedCounterId, assignCounterDisplay]);
+  }, [displayId, displayName, assignedCounterId, paramCounterId, registerCounterDisplay]);
 
   const currentCounter = counters.find(c => c.id === assignedCounterId);
   const currentTicket = tickets.find(t => t.id === currentCounter?.currentTicketId);

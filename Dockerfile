@@ -1,29 +1,32 @@
 # Multi-stage build for q-flow
-FROM node:20-bookworm AS build
+FROM node:22-bookworm AS build
 WORKDIR /app
 
 # Install dependencies
 COPY package*.json ./
-RUN npm install
+RUN npm ci
 
 # Copy source and build
 COPY . .
-RUN npm run build && npm prune --production
+RUN npm run build && npm prune --omit=dev
 
 # Runtime image
-FROM node:20-bookworm-slim
+FROM node:22-bookworm-slim
 WORKDIR /app
 ENV NODE_ENV=production
+# All runtime data (SQLite database, logs, backups) lives here; mount it as a volume.
+ENV QFLOW_DATA_DIR=/app/data
 
 # Copy production deps and built assets
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/server.js ./server.js
 COPY --from=build /app/lib ./lib
+COPY --from=build /app/scripts ./scripts
 COPY --from=build /app/package*.json ./
 
-# Ensure db file exists inside container (bind mount will override when present)
-RUN [ -f /app/db.json ] || echo "{}" > /app/db.json
+RUN mkdir -p /app/data
+VOLUME ["/app/data"]
 
 EXPOSE 3000
 CMD ["node", "server.js"]

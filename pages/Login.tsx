@@ -6,7 +6,7 @@ import { useQueue } from '../context/QueueContext';
 import { useI18n } from '../context/I18nContext';
 
 const Login: React.FC = () => {
-  const { login, user } = useAuth();
+  const { login, loginWithCode, user } = useAuth();
   const { branding } = useQueue();
   const { t, language, setLanguage } = useI18n();
   const navigate = useNavigate();
@@ -25,24 +25,25 @@ const Login: React.FC = () => {
       .catch(err => console.error('Failed to fetch auth providers:', err));
   }, []);
 
-  // Handle OAuth callback with token
+  // Handle the OAuth/OIDC redirect: /#/login?code=... (single-use) or ?error=<code>
   useEffect(() => {
-    const token = searchParams.get('token');
+    const code = searchParams.get('code');
     const errorParam = searchParams.get('error');
-    
+
     if (errorParam) {
-      setError(decodeURIComponent(errorParam));
-      // Clear the error from URL
-      window.history.replaceState({}, document.title, '/login');
+      const known = ['domain_not_allowed', 'email_not_verified', 'user_not_found'];
+      setError(t(known.includes(errorParam) ? `login.oauthError.${errorParam}` : 'login.oauthError.generic'));
+      navigate('/login', { replace: true });
+      return;
     }
-    
-    if (token) {
-      // Store token and refresh page to let AuthContext pick it up
-      localStorage.setItem('qflow_token', token);
-      window.dispatchEvent(new CustomEvent('qflow-auth-changed', { detail: { token } }));
-      navigate('/', { replace: true });
+
+    if (code) {
+      navigate('/login', { replace: true });
+      loginWithCode(code)
+        .then(() => navigate('/', { replace: true }))
+        .catch(() => setError(t('login.oauthError.generic')));
     }
-  }, [searchParams, navigate]);
+  }, [searchParams, navigate, loginWithCode, t]);
 
   if (user) return <Navigate to="/" replace />;
 
@@ -54,7 +55,7 @@ const Login: React.FC = () => {
       await login(username, password);
       navigate('/');
     } catch (err) {
-      setError(t('login.error'));
+      setError(t((err as Error)?.message === 'too_many_attempts' ? 'login.tooManyAttempts' : 'login.error'));
     } finally {
       setLoading(false);
     }

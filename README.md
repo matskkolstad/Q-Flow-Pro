@@ -91,14 +91,16 @@ npm run dev             # Vite dev on 5173, API proxied to 3000
 ```
 - Frontend dev: http://localhost:5173
 - Backend: http://localhost:3000
-- **Default users on first run** (`db.json` defaults): admin/Admin123!, operator/Operator123!
-- ⚠️ **SECURITY**: Default users are automatically flagged to change password on first login. You will be prompted to set a secure password immediately after logging in for the first time.
+- **First admin on a fresh install**: username `admin`. The password is taken from `QFLOW_ADMIN_PASSWORD`, or, if that is empty, generated and printed **once** in the server log (terminal, `journalctl -u qflow` or `docker compose logs`). A generated password must be changed at first login. There are no built-in default passwords.
 
 ## Environment Variables
 See [.env.example](.env.example). Key settings:
 - `HOST` / `PORT`: binding (default 0.0.0.0:3000)
 - `ALLOWED_ORIGINS`: comma-separated origins for CORS/WebSocket (add your domain for prod)
-- `API_KEYS`: comma-separated API keys for additional endpoint protection (optional but recommended)
+- `QFLOW_ADMIN_USERNAME` / `QFLOW_ADMIN_PASSWORD`: first admin account on a fresh install
+- `QFLOW_DATA_DIR`: where the database, logs and backups are stored (default `./data`)
+- `TRUST_PROXY`: which reverse proxies may set `X-Forwarded-For` (default: proxies on localhost/private networks). **Set this if your reverse proxy runs on a public address**, otherwise all clients share one rate-limit bucket.
+- `API_KEYS`: comma-separated API keys for integrations that call `/api/print-ticket` (optional)
 - `ALLOWED_API_IPS`: comma-separated IP addresses or CIDR blocks allowed to access API (optional)
 - `ENABLE_CSP`: set `1` when frontend is CSP-clean
 - `SESSION_TTL_HOURS`: session lifetime
@@ -128,12 +130,18 @@ docker build -t qflow-pro .
 ```
 Compose (see `docker-compose.yml`):
 ```sh
-docker-compose up -d
+docker compose up -d
+docker compose logs qflow   # shows the generated first admin password on a fresh install
 ```
-Exposes port 3000. Set env vars via compose or an `.env` file referenced there.
+Exposes port 3000. Data (database, logs, backups) is stored in `./data` on the host (mounted at `/app/data`).
+Set env vars via compose or an `.env` file next to `docker-compose.yml`.
+
+> **Upgrading from an older compose file** (which mounted `./db.json`): the database used to live only inside
+> the container. Copy it out **before** rebuilding: `docker cp qflow-pro:/app/data ./data`.
 
 ## Testing
-- E2E (Playwright): `npm run test:e2e`
+- Unit tests: `npm run test:unit`
+- E2E (Playwright, needs a running server): `QFLOW_ADMIN_PASSWORD=... npm run test:e2e` (see `.github/workflows/ci.yml` for the full setup)
 - Health check: `curl http://localhost:3000/health`
 
 ## Admin Capabilities
@@ -150,7 +158,8 @@ Exposes port 3000. Set env vars via compose or an `.env` file referenced there.
 ## Data & Persistence
 - SQLite DB at `data/qflow.db`; backups at `data/backups/`; logs at `data/logs/` (all git-ignored).
 - Server loads state from DB on boot and persists changes (settings, tickets, users, etc.).
-- Sessions stored in state with TTL (`SESSION_TTL_HOURS`).
+- Sessions are stored with a TTL (`SESSION_TTL_HOURS`); only SHA-256 hashes of session tokens are kept.
+- Each browser only receives the data its role needs: public screens (display, kiosk, mobile) never receive users, sessions, secrets or logs.
 
 ## Operational Tips
 - Set `ALLOWED_ORIGINS` to real domains before production.
@@ -161,14 +170,15 @@ Exposes port 3000. Set env vars via compose or an `.env` file referenced there.
 ## Security Considerations
 
 ### Authentication & Access Control
-- **Forced Password Change**: Default users (admin/operator) are automatically required to change their password on first login
+- **Forced Password Change**: Generated/default passwords must be changed at first login; this is enforced by the server
+- **Kiosk devices**: An admin activates a kiosk from the kiosk page. The kiosk gets its own device token and the admin is signed out, so no admin session stays on a public device. Leaving kiosk mode requires the kiosk PIN (checked by the server) and deactivates the device.
 - **Password Policy**: Minimum 8 characters with uppercase, lowercase, and digits required
 - **OAuth/OIDC Support**: Enterprise authentication with Google Workspace and OIDC providers (see [OAuth/OIDC docs](docs/oauth-oidc-auth.md))
   - Domain whitelisting for Google Workspace
   - Auto-provisioning with configurable default roles
-  - Account linking by email
+  - Account linking by email (only when the provider has verified the address)
 - **Session Management**: Configurable TTL (default 12 hours) with automatic expiration
-- **API Key Protection**: Optional API key requirement for sensitive endpoints (configure via `API_KEYS` env var)
+- **API Key Protection**: Optional API keys for integrations that print tickets (configure via `API_KEYS` env var)
 - **IP Whitelisting**: Optional IP-based access control for API endpoints (configure via `ALLOWED_API_IPS` env var)
   - Supports individual IPs: `192.168.1.100,10.0.0.5`
   - Supports CIDR notation: `192.168.1.0/24,10.0.0.0/8`
@@ -185,11 +195,10 @@ Exposes port 3000. Set env vars via compose or an `.env` file referenced there.
 To enable API key protection:
 1. Generate secure random keys: `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`
 2. Add to `.env`: `API_KEYS=your_generated_key_here`
-3. Protected endpoints will require `X-API-Key` header or `?apiKey=` query parameter
+3. Send the key in the `X-API-Key` header
 
-Protected endpoints when API keys are configured:
-- `/api/print-ticket` - Server-side ticket printing
-- All admin backup endpoints
+`/api/print-ticket` accepts either an admin session or a valid API key, and only prints on printers configured in the admin panel (`{ "printerId": "...", "ticketNumber": "A001" }`).
+Admin backup endpoints always require an admin session.
 
 ### Best Practices
 - **Updates**: Regularly update dependencies to patch security vulnerabilities
@@ -206,7 +215,7 @@ Protected endpoints when API keys are configured:
 4) Edit user: update name/role/password, save. Delete user only if at least one admin remains.
 
 ### First admin (if DB is empty)
-On first boot the defaults from `db.json` are loaded (admin/Admin123!, operator/Operator123!). Change these immediately after login under Users.
+On first boot an admin account is created (see [Quick Start](#quick-start-local)). Create operator accounts under Settings → Users.
 
 ### CLI (headless/server-side)
 Script: `npm run user-cli` (alias for `node scripts/user-cli.js`). Supports interactive shell or one-shot commands.

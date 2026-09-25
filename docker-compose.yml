@@ -1,4 +1,3 @@
-version: '3.8'
 services:
   qflow:
     build: .
@@ -7,9 +6,16 @@ services:
     ports:
       - "3000:3000"
     volumes:
-      # Map the db.json to host so data persists across container updates
-      - ./db.json:/app/db.json
+      # SQLite database, logs and backups. Keeps data across container rebuilds/updates.
+      - ./data:/app/data
     environment:
       - NODE_ENV=production
+      # Set a long random value (see .env.example)
+      - SESSION_SECRET=${SESSION_SECRET:-}
+      # Optional: password for the first admin account on a fresh install.
+      # If empty, a random password is printed once in `docker compose logs`.
+      - QFLOW_ADMIN_PASSWORD=${QFLOW_ADMIN_PASSWORD:-}
+      # Which reverse proxies may set X-Forwarded-For (see .env.example)
+      - TRUST_PROXY=${TRUST_PROXY:-}
     # If running in Proxmox LXC with limited resources
     mem_limit: 512m

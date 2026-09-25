@@ -6,6 +6,7 @@ type AuthState = {
   token: string | null;
   loading: boolean;
   login: (username: string, password: string) => Promise<void>;
+  loginWithCode: (code: string) => Promise<void>;
   logout: () => Promise<void>;
   refreshUser: () => Promise<void>;
 };
@@ -42,14 +43,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       .finally(() => setLoading(false));
   }, []);
 
-  const login = useCallback(async (username: string, password: string) => {
-    const res = await fetch('/api/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password }),
-    });
-    if (!res.ok) throw new Error('login_failed');
-    const data = await res.json();
+  const applyLogin = useCallback((data: { token: string; user: User }) => {
     localStorage.setItem(TOKEN_KEY, data.token);
     setToken(data.token);
     setUser(data.user);
@@ -57,6 +51,30 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       window.dispatchEvent(new CustomEvent('qflow-auth-changed', { detail: { token: data.token } }));
     }
   }, []);
+
+  const login = useCallback(async (username: string, password: string) => {
+    const res = await fetch('/api/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data?.error || 'login_failed');
+    }
+    applyLogin(await res.json());
+  }, [applyLogin]);
+
+  // Completes an OAuth/OIDC login: the redirect carries a single-use code, never the session token.
+  const loginWithCode = useCallback(async (code: string) => {
+    const res = await fetch('/api/auth/exchange', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code }),
+    });
+    if (!res.ok) throw new Error('invalid_code');
+    applyLogin(await res.json());
+  }, [applyLogin]);
 
   const logout = useCallback(async () => {
     if (token) {
@@ -89,8 +107,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, [token]);
 
   const value = useMemo(
-    () => ({ user, token, loading, login, logout, refreshUser }),
-    [user, token, loading, login, logout, refreshUser]
+    () => ({ user, token, loading, login, loginWithCode, logout, refreshUser }),
+    [user, token, loading, login, loginWithCode, logout, refreshUser]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
