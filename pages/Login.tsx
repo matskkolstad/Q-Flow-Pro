@@ -76,14 +76,14 @@ const Login: React.FC = () => {
           <button
             type="button"
             onClick={() => setLanguage('no')}
-            className={`text-xs font-semibold px-3 py-1 rounded-full border ${language === 'no' ? 'bg-indigo-50 text-indigo-700 border-indigo-200' : 'text-gray-600 border-gray-200 hover:border-indigo-200 hover:text-indigo-700'}`}
+            className={`text-xs font-semibold px-3 py-1 rounded-full border ${language === 'no' ? 'bg-brand-50 text-brand-700 border-brand-200' : 'text-gray-600 border-gray-200 hover:border-brand-200 hover:text-brand-700'}`}
           >
             Norsk
           </button>
           <button
             type="button"
             onClick={() => setLanguage('en')}
-            className={`text-xs font-semibold px-3 py-1 rounded-full border ${language === 'en' ? 'bg-indigo-50 text-indigo-700 border-indigo-200' : 'text-gray-600 border-gray-200 hover:border-indigo-200 hover:text-indigo-700'}`}
+            className={`text-xs font-semibold px-3 py-1 rounded-full border ${language === 'en' ? 'bg-brand-50 text-brand-700 border-brand-200' : 'text-gray-600 border-gray-200 hover:border-brand-200 hover:text-brand-700'}`}
           >
             English
           </button>
@@ -143,7 +143,7 @@ const Login: React.FC = () => {
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">{t('login.username')}</label>
             <input
-              className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500"
               value={username}
               onChange={e => setUsername(e.target.value)}
               autoComplete="username"
@@ -154,7 +154,7 @@ const Login: React.FC = () => {
             <label className="block text-sm font-medium text-gray-700 mb-1">{t('login.password')}</label>
             <input
               type="password"
-              className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500"
               value={password}
               onChange={e => setPassword(e.target.value)}
               autoComplete="current-password"
@@ -165,7 +165,7 @@ const Login: React.FC = () => {
           <button
             type="submit"
             disabled={loading}
-            className="w-full bg-indigo-600 text-white font-semibold py-2.5 rounded-lg shadow hover:bg-indigo-700 transition disabled:opacity-60"
+            className="w-full bg-brand-600 text-white font-semibold py-2.5 rounded-lg shadow hover:bg-brand-700 transition disabled:opacity-60"
           >
             {loading ? t('login.submitting') : t('login.submit')}
           </button>

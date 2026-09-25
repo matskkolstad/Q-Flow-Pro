@@ -28,7 +28,7 @@ test.describe('state is filtered per role', () => {
     const anon = await connect();
     expect(anon.session.role).toBe('PUBLIC');
     expect(Object.keys(anon.state).sort()).toEqual([
-      'branding', 'counterDisplays', 'counters', 'isClosed', 'publicMessage', 'services', 'soundSettings', 'tickets',
+      'branding', 'counterDisplays', 'counters', 'isClosed', 'publicMessage', 'services', 'settings', 'soundSettings', 'tickets',
     ]);
     expectNoSecrets(anon.state);
     anon.socket.disconnect();
@@ -41,8 +41,10 @@ test.describe('state is filtered per role', () => {
     expectNoSecrets(admin.state);
 
     const secret = uniqueName('google-secret-');
-    admin.socket.emit('update-settings', { authProviders: { google: { clientSecret: secret } } });
-    const updated = await waitForState(admin.socket, (s) => s.authProviders?.google?.clientSecretSet === true);
+    // Start listening before sending: the broadcast can arrive before the acknowledgement.
+    const updatedP = waitForState(admin.socket, (s) => s.authProviders?.google?.clientSecretSet === true);
+    await emitWithAck(admin.socket, 'update-settings', { authProviders: { google: { clientSecret: secret } } });
+    const updated = await updatedP;
     expect(JSON.stringify(updated)).not.toContain(secret);
     expectNoSecrets(updated);
 
@@ -64,10 +66,9 @@ test.describe('state is filtered per role', () => {
     expect(Array.isArray(operator.state.logs)).toBe(true);
     expectNoSecrets(operator.state);
 
-    // Operators cannot change settings
-    operator.socket.emit('update-settings', { publicMessage: 'nope' });
-    const denied = await waitForEvent(operator.socket, 'action-denied');
-    expect(denied.error).toBe('unauthorized');
+    // Operators cannot change settings or users
+    expect(await emitWithAck(operator.socket, 'update-settings', { publicMessage: 'nope' })).toEqual({ ok: false, error: 'unauthorized' });
+    expect(await emitWithAck(operator.socket, 'user:save', { user: { username: 'x', password: 'Valid-Pass1', role: 'ADMIN' } })).toEqual({ ok: false, error: 'unauthorized' });
     [admin, operator].forEach((c) => c.socket.disconnect());
   });
 });
@@ -79,8 +80,7 @@ test.describe('sessions and passwords', () => {
       expect(res.status).toBe(401);
       const client = await connect({ token });
       expect(client.session.role).toBe('PUBLIC');
-      client.socket.emit('update-settings', { publicMessage: 'pwned' });
-      expect((await waitForEvent(client.socket, 'action-denied')).error).toBe('unauthorized');
+      expect(await emitWithAck(client.socket, 'update-settings', { publicMessage: 'pwned' })).toEqual({ ok: false, error: 'unauthorized' });
       client.socket.disconnect();
     }
   });
@@ -104,8 +104,7 @@ test.describe('sessions and passwords', () => {
     const pending = await connect({ token });
     expect(pending.session).toMatchObject({ role: 'ADMIN', mustChangePassword: true });
     expect(pending.state.users).toBeUndefined();
-    pending.socket.emit('update-settings', { publicMessage: 'too early' });
-    expect((await waitForEvent(pending.socket, 'action-denied')).error).toBe('password_change_required');
+    expect(await emitWithAck(pending.socket, 'update-settings', { publicMessage: 'too early' })).toEqual({ ok: false, error: 'password_change_required' });
 
     const sessionChanged = waitForEvent(pending.socket, 'session-info', (info: any) => info.mustChangePassword === false);
     const change = await apiPost('/api/user/password', { oldPassword: 'First-Pass1', newPassword: 'Second-Pass2' }, token);
@@ -119,13 +118,12 @@ test.describe('sessions and passwords', () => {
     const admin = await connect({ token: await loginAdmin() });
     const name = uniqueName('hashprobe');
     const state = await addUsers(admin, [{ username: name, role: 'OPERATOR', password: 'Real-Pass1' }]);
-    const users = state.users.map((u: any) => (u.username === name ? { ...u, passwordHash: bcrypt.hashSync('Injected-Pass1', 4) } : u));
-    admin.socket.emit('update-settings', { users, publicMessage: `hash-${name}` });
-    await waitForState(admin.socket, (s) => s.publicMessage === `hash-${name}`);
+    const target = state.users.find((u: any) => u.username === name);
+    const res = await emitWithAck(admin.socket, 'user:save', { user: { ...target, passwordHash: bcrypt.hashSync('Injected-Pass1', 4) } });
+    expect(res.ok).toBe(true);
 
     expect((await apiPost('/api/login', { username: name, password: 'Injected-Pass1' })).status).toBe(401);
     expect((await apiPost('/api/login', { username: name, password: 'Real-Pass1' })).status).toBe(200);
-    admin.socket.emit('update-settings', { publicMessage: '' });
     admin.socket.disconnect();
   });
 
@@ -153,8 +151,8 @@ test.describe('printing endpoint', () => {
 
   test('printer addresses are validated', async () => {
     const admin = await connect({ token: await loginAdmin() });
-    admin.socket.emit('update-settings', { printers: [{ name: 'bad', ipAddress: 'http://169.254.169.254/latest', port: 80 }] });
-    expect((await waitForEvent(admin.socket, 'settings-error')).error).toBe('invalid_printer');
+    const res = await emitWithAck(admin.socket, 'printer:save', { printer: { name: 'bad', ipAddress: 'http://169.254.169.254/latest', port: 80 } });
+    expect(res).toEqual({ ok: false, error: 'invalid_printer' });
     admin.socket.disconnect();
   });
 });
@@ -217,15 +215,19 @@ test.describe('kiosk devices', () => {
     // Kiosk tickets are not subject to the anonymous rate limit
     const service = kiosk.state.services.find((s: any) => s.isOpen !== false);
     for (let i = 0; i < 6; i++) {
-      expect((await emitWithAck(kiosk.socket, 'add-ticket', { serviceId: service.id })).ok).toBe(true);
+      const drawn = await emitWithAck(kiosk.socket, 'add-ticket', { serviceId: service.id });
+      expect(drawn.ok).toBe(true);
+      // No printer is assigned, so the kiosk must not tell the customer to take a printout
+      expect(drawn.printing).toBe(false);
     }
 
-    // A kiosk cannot change settings
-    kiosk.socket.emit('update-settings', { publicMessage: 'kiosk' });
-    expect((await waitForEvent(kiosk.socket, 'action-denied')).error).toBe('unauthorized');
+    // A kiosk cannot change settings or call tickets
+    expect(await emitWithAck(kiosk.socket, 'update-settings', { publicMessage: 'kiosk' })).toEqual({ ok: false, error: 'unauthorized' });
+    expect(await emitWithAck(kiosk.socket, 'ticket:call-next', { counterId: 'c1' })).toEqual({ ok: false, error: 'unauthorized' });
 
-    admin.socket.emit('update-settings', { kioskExitPin: '4821' });
-    await waitForState(admin.socket, (s) => s.kioskExitPinSet === true);
+    const pinSet = waitForState(admin.socket, (s) => s.kioskExitPinSet === true);
+    await emitWithAck(admin.socket, 'update-settings', { kioskExitPin: '4821' });
+    await pinSet;
     expect(await emitWithAck(kiosk.socket, 'verify-kiosk-pin', { pin: '0000' })).toEqual({ ok: false, error: 'invalid_pin' });
     expect(await emitWithAck(kiosk.socket, 'verify-kiosk-pin', { pin: '4821' })).toEqual({ ok: true });
 

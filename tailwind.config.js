@@ -7,11 +7,19 @@ export default {
     './components/**/*.{js,ts,jsx,tsx}',
     './context/**/*.{js,ts,jsx,tsx}',
     './pages/**/*.{js,ts,jsx,tsx}',
+    './utils/**/*.{js,ts,jsx,tsx}',
   ],
   theme: {
     extend: {
+      colors: {
+        // Brand colour scale. Values come from CSS variables set from the admin's brand colour
+        // (see utils/color.ts); defaults are Tailwind's indigo.
+        brand: Object.fromEntries(
+          [50, 100, 200, 300, 400, 500, 600, 700, 800, 900].map((step) => [step, `rgb(var(--brand-${step}) / <alpha-value>)`]),
+        ),
+      },
       fontFamily: {
-        sans: ['Inter', 'system-ui', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'sans-serif'],
+        sans: ['Inter Variable', 'Inter', 'system-ui', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'sans-serif'],
       },
       animation: {
         'print-ticket': 'print 1.5s ease-out forwards',

@@ -7,7 +7,7 @@ import { useAuth } from '../context/AuthContext';
 import { useI18n } from '../context/I18nContext';
 
 const ModeCard: React.FC<{ to: string; title: string; desc: string; icon: React.ReactNode; color: string }> = ({ to, title, desc, icon, color }) => (
-  <Link to={to} className="group relative overflow-hidden bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-xl hover:border-indigo-100 transition-all duration-300">
+  <Link to={to} className="group relative overflow-hidden bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-xl hover:border-brand-100 transition-all duration-300">
     <div className={`absolute top-0 right-0 p-24 -mr-8 -mt-8 rounded-full opacity-10 group-hover:scale-110 transition-transform duration-500 ${color}`}></div>
     <div className={`w-12 h-12 rounded-xl flex items-center justify-center mb-4 ${color} text-white shadow-md`}>
       {icon}
@@ -43,7 +43,7 @@ const Home: React.FC = () => {
               </span>
               <button
                 onClick={() => logout().then(() => navigate('/login'))}
-                className="text-indigo-600 hover:text-indigo-700 font-medium"
+                className="text-brand-600 hover:text-brand-700 font-medium"
               >
                 {t('common.logout')}
               </button>
@@ -108,7 +108,7 @@ const Home: React.FC = () => {
           title={t('home.card.counter.title')} 
           desc={t('home.card.counter.desc')} 
           icon={<Tv size={24} />} 
-          color="bg-indigo-700"
+          color="bg-brand-700"
         />
       </div>
       

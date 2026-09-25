@@ -78,11 +78,19 @@ export const emitWithAck = <T = any>(socket: Socket, event: string, payload?: un
 
 // Adds users through the admin socket (the same path the admin panel uses).
 export const addUsers = async (admin: Connected, newUsers: Array<Record<string, unknown>>) => {
-  const current = await new Promise<any>((resolve) => {
+  for (const user of newUsers) {
+    const res = await emitWithAck(admin.socket, 'user:save', { user });
+    if (!res.ok) throw new Error(`user:save failed: ${res.error}`);
+  }
+  return new Promise<any>((resolve) => {
     admin.socket.once('init-state', resolve);
     admin.socket.emit('request-state');
   });
-  const usernames = newUsers.map((u) => u.username);
-  admin.socket.emit('update-settings', { users: [...current.users, ...newUsers] });
-  return waitForState(admin.socket, (s) => usernames.every((name) => s.users?.some((u: any) => u.username === name)));
+};
+
+// Creates a new operator account and returns a connected socket for it.
+export const connectOperator = async (admin: Connected) => {
+  const username = uniqueName('op');
+  await addUsers(admin, [{ username, role: 'OPERATOR', password: 'Operator-Pass1' }]);
+  return connect({ token: (await login(username, 'Operator-Pass1')).token });
 };

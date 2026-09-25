@@ -1,6 +1,8 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
+// Bundled font: works on kiosks and screens without internet access
+import '@fontsource-variable/inter';
 import './index.css';
 
 const rootElement = document.getElementById('root');

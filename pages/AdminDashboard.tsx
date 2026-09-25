@@ -1,1517 +1,172 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { useQueue } from '../context/QueueContext';
-import { TicketStatus, Service, User, Printer } from '../types';
-import { Logo } from '../components/Logo';
-import { Users, Clock, Trash2, Bell, CheckCircle, Mic, Settings, List, X, Play, Download, Printer as PrinterIcon, Monitor, Shield, Lock, Terminal } from 'lucide-react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
+import { BarChart3, Clock, List, LogOut, Settings, Shield } from 'lucide-react';
+import { useQueue, setSoundRole } from '../context/QueueContext';
 import { useAuth } from '../context/AuthContext';
-import { useI18n, SupportedLanguage } from '../context/I18nContext';
+import { useI18n } from '../context/I18nContext';
+import { Logo } from '../components/Logo';
+import DashboardView from './admin/DashboardView';
+import StatsView from './admin/StatsView';
+import LogsView from './admin/LogsView';
+import AccountSettings from './admin/settings/AccountSettings';
+import GeneralSettings from './admin/settings/GeneralSettings';
+import BrandingSettings from './admin/settings/BrandingSettings';
+import ServicesSettings from './admin/settings/ServicesSettings';
+import CountersSettings from './admin/settings/CountersSettings';
+import UsersSettings from './admin/settings/UsersSettings';
+import DevicesSettings from './admin/settings/DevicesSettings';
+import ScheduleSettings from './admin/settings/ScheduleSettings';
+import BackupSettings from './admin/settings/BackupSettings';
+import AuthSettings from './admin/settings/AuthSettings';
 
-type SettingsTab = 'general' | 'services' | 'counters' | 'users' | 'devices';
-type ViewTab = 'dashboard' | 'logs' | 'settings';
+type View = 'dashboard' | 'stats' | 'logs' | 'settings';
+type SettingsTab = 'account' | 'general' | 'branding' | 'services' | 'counters' | 'users' | 'devices' | 'schedule' | 'backups' | 'auth';
+
+const ADMIN_TABS: SettingsTab[] = ['general', 'branding', 'services', 'counters', 'users', 'devices', 'schedule', 'backups', 'auth', 'account'];
+const OPERATOR_TABS: SettingsTab[] = ['account'];
+// The selected counter is remembered per browser, so each workstation keeps "its" counter.
+const COUNTER_KEY = 'qflow_counter_id';
+
+const SETTINGS_COMPONENTS: Record<SettingsTab, React.FC> = {
+  account: AccountSettings,
+  general: GeneralSettings,
+  branding: BrandingSettings,
+  services: ServicesSettings,
+  counters: CountersSettings,
+  users: UsersSettings,
+  devices: DevicesSettings,
+  schedule: ScheduleSettings,
+  backups: BackupSettings,
+  auth: AuthSettings,
+};
 
 const AdminDashboard: React.FC = () => {
-          const { 
-                    counters, tickets, logs, users, services, printers, kiosks, counterDisplays, isClosed, publicMessage, soundSettings, branding, kioskExitPinSet, authProviders, setPublicMessage, setSoundSettings, setBranding, setKioskExitPin, setAuthProviders, setSystemClosed, triggerSound, reportError,
-                callNextTicket, callSpecificTicket, updateTicketStatus, deleteTicket,
-        addService, updateService, removeService, addCounter, removeCounter, updateCounter, addUser, updateUser, removeUser,
-            addPrinter, removePrinter, assignPrinterToKiosk, removeKiosk, assignCounterDisplay, setCounterDisplayMessage, removeCounterDisplay,
-        resetSystem, updateCounterStatus,
-        getWaitTime
-        } = useQueue();
-    const { user, token, logout } = useAuth();
-    const { language, setLanguage, t } = useI18n();
-    const navigate = useNavigate();
-    const isOperator = user?.role === 'OPERATOR';
-    const isAdmin = user?.role === 'ADMIN';
-
-    // Mark this client so QueueContext knows it may play sounds
-    useEffect(() => {
-        localStorage.setItem('qflow_client_role', 'admin');
-        return () => {
-            const role = localStorage.getItem('qflow_client_role');
-            if (role === 'admin') localStorage.removeItem('qflow_client_role');
-        };
-    }, []);
-
-    const [activeCounterId, setActiveCounterId] = useState<string>(counters[0]?.id || '');
-
-    // Keep selected counter in sync when counters load or change
-        const [view, setView] = useState<ViewTab>('dashboard');
-    const [settingsTab, setSettingsTab] = useState<SettingsTab>('general');
-
-    const allowedSettingsTabs = useMemo<SettingsTab[]>(() => {
-        if (isAdmin) return ['general', 'services', 'counters', 'users', 'devices'];
-        return ['general', 'devices'];
-    }, [isAdmin]);
-
-  // Form States
-    const [newService, setNewService] = useState<Omit<Service, 'id'>>({ name: '', prefix: '', color: 'bg-gray-500', estimatedTimePerPersonMinutes: 5, priority: 1, isOpen: true });
-    const [newUser, setNewUser] = useState<{ name: string; username: string; role: 'ADMIN' | 'OPERATOR'; password: string; mustChangePassword: boolean }>({ name: '', username: '', role: 'OPERATOR', password: '', mustChangePassword: true });
-    const [pinDraft, setPinDraft] = useState('');
-    const [pinSaved, setPinSaved] = useState(false);
-    // OAuth client secrets are write-only: typed here and sent once, never received from the server.
-    const [secretDrafts, setSecretDrafts] = useState<{ google: string; oidc: string }>({ google: '', oidc: '' });
-  const [newCounterName, setNewCounterName] = useState('');
-  const [newPrinter, setNewPrinter] = useState<Omit<Printer, 'id' | 'status'>>({ name: '', ipAddress: '', port: 9100, type: 'EPSON_IP' });
-    const [counterDisplayMessages, setCounterDisplayMessages] = useState<Record<string, string>>({});
-    const [editingMessages, setEditingMessages] = useState<Set<string>>(new Set());
-        const [pwdOld, setPwdOld] = useState('');
-        const [pwdNew, setPwdNew] = useState('');
-        const [pwdStatus, setPwdStatus] = useState<'idle' | 'saving' | 'success' | 'error'>('idle');
-        const [userDrafts, setUserDrafts] = useState<Record<string, { name: string; username: string; role: 'ADMIN' | 'OPERATOR'; password?: string }>>({});
-        const [serviceDrafts, setServiceDrafts] = useState<Record<string, { etaText?: string }>>({});
-    const [backupStatus, setBackupStatus] = useState<'idle' | 'working' | 'success' | 'error'>('idle');
-    const [backupMessage, setBackupMessage] = useState<string>('');
-    const [backups, setBackups] = useState<{ file: string; mtime: number }[]>([]);
-    const [backupsLoading, setBackupsLoading] = useState(false);
-    const liveLogRef = useRef<HTMLDivElement>(null);
-    const [followLog, setFollowLog] = useState(true);
-
-    useEffect(() => {
-        if (!activeCounterId && counters[0]) {
-                setActiveCounterId(counters[0].id);
-        } else if (activeCounterId && !counters.find(c => c.id === activeCounterId) && counters[0]) {
-                setActiveCounterId(counters[0].id);
-        }
-    }, [counters, activeCounterId]);
-
-    useEffect(() => {
-        if (!allowedSettingsTabs.includes(settingsTab)) {
-            setSettingsTab('general');
-        }
-    }, [allowedSettingsTabs, settingsTab]);
-
-    useEffect(() => {
-        setCounterDisplayMessages((prev) => {
-            let changed = false;
-            const next: Record<string, string> = { ...prev };
-            counterDisplays.forEach(d => {
-                const incoming = d.message || '';
-                const isEditing = editingMessages.has(d.id);
-                const current = next[d.id] ?? '';
-                if (!isEditing && current !== incoming) {
-                    next[d.id] = incoming;
-                    changed = true;
-                }
-            });
-            return changed ? next : prev;
-        });
-    }, [counterDisplays, editingMessages]);
-
-  const currentCounter = counters.find(c => c.id === activeCounterId);
-  const waitingTickets = tickets.filter(t => t.status === TicketStatus.WAITING).sort((a,b) => a.createdAt - b.createdAt);
-  const avgWaitTime = useMemo(() => {
-      if (waitingTickets.length === 0) return 0;
-      // Use shared per-service wait estimator from QueueContext for consistency with kiosk/mobile
-      const byService = services.map((svc) => {
-          const count = waitingTickets.filter(t => t.serviceId === svc.id).length;
-          const wait = getWaitTime(svc.id);
-          return { count, wait };
-      });
-
-      const totalWaiting = byService.reduce((acc, s) => acc + s.count, 0);
-      if (totalWaiting === 0) return 0;
-
-      const weighted = byService.reduce((acc, s) => acc + (s.count * s.wait), 0);
-      return Math.round(weighted / totalWaiting);
-  }, [waitingTickets, services, getWaitTime]);
-  const totalServed = tickets.filter(t => t.status === TicketStatus.COMPLETED).length;
-
-    const handleComplete = () => {
-        if (currentCounter?.currentTicketId) {
-            updateTicketStatus(currentCounter.currentTicketId, TicketStatus.COMPLETED, activeCounterId);
-        }
-    };
-
-  const handleCreateService = () => {
-      if(newService.name && newService.prefix) {
-          addService(newService);
-          setNewService({ name: '', prefix: '', color: 'bg-gray-500', estimatedTimePerPersonMinutes: 5, priority: 1, isOpen: true });
-      }
-  };
-
-    const handleCreateUser = () => {
-            if (!newUser.username || !newUser.password) return;
-            const payload: Omit<User, 'id'> & { password: string } = {
-                name: newUser.name || newUser.username,
-                username: newUser.username,
-                role: newUser.role,
-                password: newUser.password,
-                mustChangePassword: newUser.mustChangePassword,
-            };
-            addUser(payload);
-            setNewUser({ name: '', username: '', role: 'OPERATOR', password: '', mustChangePassword: true });
-    };
-
-  const handleCreateCounter = () => {
-      if(newCounterName) {
-          addCounter({ name: newCounterName, activeServiceIds: services.map(s=>s.id), isOnline: true });
-          setNewCounterName('');
-      }
-  };
-
-  const handleAddPrinter = () => {
-      if(newPrinter.name && newPrinter.ipAddress) {
-          addPrinter(newPrinter);
-          setNewPrinter({ name: '', ipAddress: '', port: 9100, type: 'EPSON_IP' });
-      }
-  };
-
-  const toggleServiceForCounter = (counterId: string, serviceId: string) => {
-    const counter = counters.find(c => c.id === counterId);
-    if (!counter) return;
-    
-    const currentServices = counter.activeServiceIds;
-    let newServices;
-    if (currentServices.includes(serviceId)) {
-        newServices = currentServices.filter(id => id !== serviceId);
-    } else {
-        newServices = [...currentServices, serviceId];
+  const { counters, branding, isClosed } = useQueue();
+  const { user, logout } = useAuth();
+  const { t } = useI18n();
+  const navigate = useNavigate();
+  const isAdmin = user?.role === 'ADMIN';
+  const [view, setView] = useState<View>('dashboard');
+  const tabs = useMemo(() => (isAdmin ? ADMIN_TABS : OPERATOR_TABS), [isAdmin]);
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>(tabs[0]);
+  const [counterId, setCounterId] = useState<string>(() => {
+    try {
+      return localStorage.getItem(COUNTER_KEY) || '';
+    } catch {
+      return '';
     }
-    updateCounter(counterId, { activeServiceIds: newServices });
-  };
+  });
 
-  const handleExportCSV = () => {
-        const headers = [
-                t('admin.logs.table.time'),
-                t('admin.logs.table.type'),
-                t('admin.logs.table.message')
-        ];
-    const rows = logs.map(log => [
-        new Date(log.timestamp).toLocaleString(),
-        log.type,
-        `"${log.message.replace(/"/g, '""')}"`
-    ]);
-    
-    const csvContent = "data:text/csv;charset=utf-8," 
-        + headers.join(",") + "\n" 
-        + rows.map(e => e.join(",")).join("\n");
-        
-    const encodedUri = encodeURI(csvContent);
-    const link = document.createElement("a");
-    link.setAttribute("href", encodedUri);
-    link.setAttribute("download", `qflow_logs_${new Date().toISOString().slice(0,10)}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-  };
+  // The operator panel may play call sounds (can be turned off under Settings → General)
+  useEffect(() => {
+    setSoundRole('admin');
+    return () => setSoundRole(null);
+  }, []);
 
-    const handleBrandTextChange = (text: string) => {
-        setBranding({ brandText: text });
-    };
+  useEffect(() => {
+    if (!tabs.includes(settingsTab)) setSettingsTab(tabs[0]);
+  }, [tabs, settingsTab]);
 
-    const handleLogoUpload = async (file?: File | null) => {
-        if (!file) return;
-        const reader = new FileReader();
-        reader.onload = () => {
-            const result = typeof reader.result === 'string' ? reader.result : '';
-            setBranding({ brandLogoUrl: result });
-        };
-        reader.readAsDataURL(file);
-    };
+  useEffect(() => {
+    if (counters.length === 0) return;
+    if (!counters.some((c) => c.id === counterId)) setCounterId(counters[0].id);
+  }, [counters, counterId]);
 
-    const handleLogoRemove = () => {
-        setBranding({ brandLogoUrl: '' });
-    };
+  useEffect(() => {
+    try {
+      if (counterId) localStorage.setItem(COUNTER_KEY, counterId);
+    } catch {
+      // ignore
+    }
+  }, [counterId]);
 
-    const handleKioskPinSave = () => {
-        const pin = pinDraft.trim();
-        if (pin && !/^\d{4,12}$/.test(pin)) {
-            reportError(t('admin.general.pin.invalid'));
-            return;
-        }
-        setKioskExitPin(pin);
-        setPinDraft('');
-        setPinSaved(true);
-        setTimeout(() => setPinSaved(false), 2500);
-    };
+  const currentCounter = counters.find((c) => c.id === counterId);
+  const SettingsComponent = SETTINGS_COMPONENTS[settingsTab];
 
-    const handleSecretSave = (provider: 'google' | 'oidc') => {
-        const secret = secretDrafts[provider].trim();
-        if (!secret) return;
-        setAuthProviders({ [provider]: { ...authProviders[provider], clientSecret: secret } });
-        setSecretDrafts(prev => ({ ...prev, [provider]: '' }));
-    };
-
-    const handleCounterDisplayMessageChange = (displayId: string, value: string) => {
-        setCounterDisplayMessages(prev => ({ ...prev, [displayId]: value }));
-        setEditingMessages(prev => {
-            const next = new Set(prev);
-            next.add(displayId);
-            return next;
-        });
-    };
-
-    const handleCounterDisplayMessageSave = (displayId: string) => {
-        const message = (counterDisplayMessages[displayId] || '').trim();
-        setCounterDisplayMessage(displayId, message);
-        setEditingMessages(prev => {
-            const next = new Set(prev);
-            next.delete(displayId);
-            return next;
-        });
-    };
-
-    const handleChangePassword = async () => {
-        if (!token) return;
-        setPwdStatus('saving');
-        try {
-            const res = await fetch('/api/user/password', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    Authorization: `Bearer ${token}`
-                },
-                body: JSON.stringify({ oldPassword: pwdOld, newPassword: pwdNew })
-            });
-            if (!res.ok) throw new Error('failed');
-            setPwdStatus('success');
-            setPwdOld('');
-            setPwdNew('');
-        } catch (err) {
-            setPwdStatus('error');
-            reportError(t('admin.general.password.error'));
-        } finally {
-            setTimeout(() => setPwdStatus('idle'), 2500);
-        }
-    };
-
-    const fetchBackups = async () => {
-        if (!token) return;
-        setBackupsLoading(true);
-        try {
-            const res = await fetch('/api/admin/backups', {
-                headers: {
-                    Authorization: `Bearer ${token}`
-                }
-            });
-            if (!res.ok) throw new Error('failed');
-            const data = await res.json();
-            setBackups(Array.isArray(data?.backups) ? data.backups : []);
-        } catch (err) {
-            setBackupStatus('error');
-            setBackupMessage(t('admin.general.backup.fetchError'));
-            reportError(t('admin.general.backup.fetchError'));
-        } finally {
-            setBackupsLoading(false);
-        }
-    };
-
-    const handleCreateBackup = async () => {
-        if (!token) return;
-        setBackupStatus('working');
-        setBackupMessage(t('admin.general.backup.creating'));
-        try {
-            const res = await fetch('/api/admin/backup', {
-                method: 'POST',
-                headers: {
-                    Authorization: `Bearer ${token}`
-                }
-            });
-            if (!res.ok) throw new Error('failed');
-            const data = await res.json();
-            setBackupStatus('success');
-            setBackupMessage(data?.file ? t('admin.general.backup.createdWithFile', { file: data.file }) : t('admin.general.backup.created'));
-            await fetchBackups();
-        } catch (err) {
-            setBackupStatus('error');
-            setBackupMessage(t('admin.general.backup.failed'));
-            reportError(t('admin.general.backup.failed'));
-        }
-    };
-
-    const handleDownloadBackup = async (file: string) => {
-        if (!token) return;
-        try {
-            const res = await fetch(`/api/admin/backup/${encodeURIComponent(file)}`, {
-                headers: {
-                    Authorization: `Bearer ${token}`
-                }
-            });
-            if (!res.ok) throw new Error('failed');
-            const blob = await res.blob();
-            const url = window.URL.createObjectURL(blob);
-            const link = document.createElement('a');
-            link.href = url;
-            link.download = file;
-            document.body.appendChild(link);
-            link.click();
-            link.remove();
-            window.URL.revokeObjectURL(url);
-            setBackupStatus('success');
-            setBackupMessage(t('admin.general.backup.downloaded', { file }));
-        } catch (err) {
-            setBackupStatus('error');
-            setBackupMessage(t('admin.general.backup.downloadError'));
-            reportError(t('admin.general.backup.downloadError'));
-        }
-    };
-
-    useEffect(() => {
-        if (!followLog) return;
-        if (!liveLogRef.current) return;
-        liveLogRef.current.scrollTop = liveLogRef.current.scrollHeight;
-    }, [logs, followLog]);
-
-    useEffect(() => {
-        if (!token || !isAdmin) return;
-        if (view !== 'settings' || settingsTab !== 'general') return;
-        fetchBackups();
-    }, [token, isAdmin, view, settingsTab]);
-
-    useEffect(() => {
-        // Clear drafts when services array updates (e.g., after server echo)
-        setServiceDrafts({});
-    }, [services]);
-
-    const adminCount = useMemo(() => users.filter(u => u.role === 'ADMIN').length, [users]);
-
-    const getUserDraft = (id: string) => userDrafts[id] || { name: users.find(u => u.id === id)?.name || '', username: users.find(u => u.id === id)?.username || '', role: (users.find(u => u.id === id)?.role || 'OPERATOR') as 'ADMIN' | 'OPERATOR', password: '' };
-
-    const getServiceDraftEtaValue = (id: string, fallback: number) => {
-        const draft = serviceDrafts[id];
-        if (draft && draft.etaText !== undefined) return draft.etaText;
-        return String(fallback);
-    };
-
-    const setServiceEtaDraft = (id: string, value: string) => {
-        setServiceDrafts(prev => ({ ...prev, [id]: { etaText: value } }));
-        const svc = services.find(s => s.id === id);
-        const num = Number(value);
-        if (svc && Number.isFinite(num) && num > 0 && num !== svc.estimatedTimePerPersonMinutes) {
-            updateService(id, { estimatedTimePerPersonMinutes: num });
-        }
-    };
-
-    const saveServiceEta = (id: string) => {
-        const svc = services.find(s => s.id === id);
-        if (!svc) return;
-        const draft = serviceDrafts[id];
-        const raw = draft?.etaText;
-        const eta = raw !== undefined ? Number(raw) : undefined;
-
-        if (!Number.isFinite(eta) || eta <= 0) {
-            setServiceDrafts(prev => {
-                const next = { ...prev };
-                delete next[id];
-                return next;
-            });
-            return;
-        }
-
-        if (eta !== svc.estimatedTimePerPersonMinutes) {
-            updateService(id, { estimatedTimePerPersonMinutes: eta });
-        }
-
-        setServiceDrafts(prev => {
-            const next = { ...prev };
-            delete next[id];
-            return next;
-        });
-    };
-
-    const handleUserDraftChange = (id: string, field: 'name' | 'username' | 'role' | 'password', value: string) => {
-        const val = field === 'role' ? (value as 'ADMIN' | 'OPERATOR') : value;
-        setUserDrafts(prev => ({
-            ...prev,
-            [id]: { ...getUserDraft(id), [field]: val }
-        }));
-    };
-
-    const handleSaveUser = (id: string) => {
-        const draft = getUserDraft(id);
-        const current = users.find(u => u.id === id);
-        if (current?.role === 'ADMIN' && adminCount <= 1 && draft.role !== 'ADMIN') {
-            alert(t('admin.users.cannotDemoteAdmin'));
-            return;
-        }
-        const payload: any = {
-            name: draft.name || draft.username,
-            username: draft.username,
-            role: draft.role,
-        };
-        if (draft.password) payload.password = draft.password;
-        updateUser(id, payload);
-        setUserDrafts(prev => ({ ...prev, [id]: { ...draft, password: '' } }));
-    };
+  const navItems: { key: View; label: string; icon: React.ReactNode }[] = [
+    { key: 'dashboard', label: t('admin.nav.dashboard'), icon: <List size={18} /> },
+    { key: 'stats', label: t('admin.nav.stats'), icon: <BarChart3 size={18} /> },
+    { key: 'logs', label: t('admin.nav.logs'), icon: <Clock size={18} /> },
+    { key: 'settings', label: t('admin.nav.settings'), icon: <Settings size={18} /> },
+  ];
 
   return (
     <div className="min-h-screen bg-gray-100 flex flex-col font-sans">
-      {/* Top Navbar */}
-      <header className="bg-white shadow-md border-b border-gray-200 px-6 py-4 flex justify-between items-center z-20 sticky top-0">
-        <div className="flex items-center gap-8">
-            <Link to="/">
-                            <Logo brandText={branding.brandText} brandLogoUrl={branding.brandLogoUrl} />
+      <header className="bg-white shadow-md border-b border-gray-200 px-4 md:px-6 py-3 z-20 sticky top-0">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-4 md:gap-8 min-w-0">
+            <Link to="/" className="shrink-0">
+              <Logo brandText={branding.brandText} brandLogoUrl={branding.brandLogoUrl} className="h-9 w-9" textClass="text-xl md:text-2xl font-black text-gray-900" />
             </Link>
-            <nav className="hidden md:flex gap-2 bg-gray-100 p-1.5 rounded-xl">
-                <button onClick={() => setView('dashboard')} className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-bold transition-all ${view === 'dashboard' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-500 hover:text-gray-900'}`}>
-                    <List size={18}/> {t('admin.nav.dashboard')}
+            <nav className="flex gap-1 bg-gray-100 p-1 rounded-xl overflow-x-auto max-w-full" aria-label={t('admin.nav.label')}>
+              {navItems.map((item) => (
+                <button
+                  key={item.key}
+                  onClick={() => setView(item.key)}
+                  aria-current={view === item.key ? 'page' : undefined}
+                  className={`flex items-center gap-2 px-3 md:px-4 py-2 rounded-lg text-sm font-bold transition-all whitespace-nowrap ${view === item.key ? 'bg-white text-brand-600 shadow-sm' : 'text-gray-500 hover:text-gray-900'}`}
+                >
+                  {item.icon} <span className="hidden sm:inline">{item.label}</span>
                 </button>
-                <button onClick={() => setView('logs')} className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-bold transition-all ${view === 'logs' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-500 hover:text-gray-900'}`}>
-                    <Clock size={18}/> {t('admin.nav.logs')}
-                </button>
-                <button onClick={() => setView('settings')} className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-bold transition-all ${view === 'settings' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-500 hover:text-gray-900'} ${!isAdmin ? 'opacity-60 cursor-not-allowed' : ''}`} disabled={!isAdmin}>
-                    <Settings size={18}/> {t('admin.nav.settings')}
-                </button>
+              ))}
             </nav>
-        </div>
-        <div className="flex items-center gap-4">
-            <div className="flex items-center gap-3 bg-white px-4 py-2 rounded-lg border border-gray-200 shadow-sm">
-                <span className="text-xs text-gray-500 uppercase font-bold tracking-wider">{t('admin.header.counter')}</span>
-                <select 
-                    value={activeCounterId} 
-                    onChange={(e) => setActiveCounterId(e.target.value)}
-                    className="bg-transparent text-sm font-bold text-gray-800 focus:outline-none cursor-pointer"
-                >
-                    {counters.length === 0 && <option value="">{t('admin.header.noCounters')}</option>}
-                    {counters.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                </select>
-                <div className={`h-2.5 w-2.5 rounded-full ${currentCounter?.isOnline ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`}></div>
-            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2 md:gap-3">
+            {isClosed && <span className="px-3 py-1 rounded-full bg-red-100 text-red-700 text-xs font-bold">{t('admin.header.closed')}</span>}
             <div className="flex items-center gap-2 bg-white px-3 py-2 rounded-lg border border-gray-200 shadow-sm">
-                <span className="text-xs text-gray-500 uppercase font-bold tracking-wider">{t('common.language')}</span>
-                <select
-                    value={language}
-                    onChange={(e) => setLanguage(e.target.value as SupportedLanguage)}
-                    className="bg-transparent text-sm font-bold text-gray-800 focus:outline-none cursor-pointer"
-                >
-                    <option value="en">{t('common.language.english')}</option>
-                    <option value="no">{t('common.language.norwegian')}</option>
-                </select>
+              <label htmlFor="counter-select" className="text-xs text-gray-500 uppercase font-bold tracking-wider">{t('admin.header.counter')}</label>
+              <select
+                id="counter-select"
+                value={counterId}
+                onChange={(e) => setCounterId(e.target.value)}
+                className="bg-transparent text-sm font-bold text-gray-800 focus:outline-none cursor-pointer max-w-[10rem]"
+              >
+                {counters.length === 0 && <option value="">{t('admin.header.noCounters')}</option>}
+                {counters.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+              <span className={`h-2.5 w-2.5 rounded-full ${currentCounter?.isOnline ? 'bg-green-500' : 'bg-red-500'}`} aria-hidden="true"></span>
             </div>
-            <div className="flex items-center gap-2 text-sm text-gray-600">
-                {user && <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full bg-gray-100 text-gray-700 border border-gray-200"><Shield size={14}/> {user.name} · {user.role === 'ADMIN' ? t('role.admin') : t('role.operator')}</span>}
-                <button onClick={() => logout().then(() => navigate('/login'))} className="flex items-center gap-2 text-sm font-bold text-red-600 hover:text-red-700 px-3 py-2 bg-red-50 hover:bg-red-100 rounded-lg" title={t('admin.header.logout')}>
-                    <X size={18} /> {t('admin.header.logout')}
-                </button>
-            </div>
+            {user && (
+              <span className="hidden md:inline-flex items-center gap-1 px-3 py-1 rounded-full bg-gray-100 text-gray-700 border border-gray-200 text-sm">
+                <Shield size={14} /> {user.name} · {isAdmin ? t('role.admin') : t('role.operator')}
+              </span>
+            )}
+            <button
+              onClick={() => logout().then(() => navigate('/login'))}
+              className="flex items-center gap-2 text-sm font-bold text-red-600 hover:text-red-700 px-3 py-2 bg-red-50 hover:bg-red-100 rounded-lg"
+              title={t('admin.header.logout')}
+            >
+              <LogOut size={18} /> <span className="hidden sm:inline">{t('admin.header.logout')}</span>
+            </button>
+          </div>
         </div>
       </header>
 
-      {/* Main Content */}
-      <main className="flex-1 p-6 max-w-7xl mx-auto w-full">
-        
-        {view === 'dashboard' && (
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                
-                {/* Active Control Area */}
-                <div className="lg:col-span-2 space-y-6">
-                    {/* Current Ticket Card */}
-                    <div className="bg-white rounded-[2rem] shadow-sm border border-gray-200 p-8 flex flex-col items-center justify-center min-h-[400px] relative overflow-hidden">
-                        <div className="absolute top-0 w-full h-3 bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500"></div>
-                        
-                        {currentCounter?.currentTicketId ? (
-                             <div className="text-center w-full z-10 animate-in fade-in zoom-in duration-300">
-                                <span className="inline-flex items-center gap-2 px-5 py-2 rounded-full bg-green-100 text-green-700 font-bold text-sm mb-8 border border-green-200">
-                                    <span className="w-2 h-2 rounded-full bg-green-600 animate-pulse"></span>
-                                    {t('admin.dashboard.nowServing')}
-                                </span>
-                                <div className="text-[10rem] leading-none font-black text-gray-900 mb-2 tracking-tighter">
-                                    {tickets.find(t => t.id === currentCounter.currentTicketId)?.number}
-                                </div>
-                                <div className="text-2xl text-gray-500 font-medium mb-12">
-                                    {services.find(s => s.id === tickets.find(t => t.id === currentCounter.currentTicketId)?.serviceId)?.name}
-                                </div>
-                                <div className="flex justify-center gap-4">
-                                    <button 
-                                        onClick={() => {
-                                        const num = tickets.find(t => t.id === currentCounter.currentTicketId)?.number;
-                                        if (!num) return;
-                                        triggerSound({ type: 'ding', text: t('admin.dashboard.voiceCall', { number: num, counter: currentCounter.name }) });
-                                        }}
-                                        className="flex items-center gap-2 px-8 py-5 bg-gray-100 hover:bg-gray-200 text-gray-800 rounded-2xl font-bold transition-all active:scale-95 text-lg"
-                                    >
-                                        <Bell size={24} /> {t('admin.dashboard.callAgain')}
-                                    </button>
-                                    <button 
-                                        onClick={handleComplete}
-                                        className="flex items-center gap-2 px-10 py-5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl font-bold shadow-xl shadow-indigo-200 transition-all hover:-translate-y-1 active:scale-95 text-lg"
-                                    >
-                                        <CheckCircle size={24} /> {t('admin.dashboard.complete')}
-                                    </button>
-                                </div>
-                             </div>
-                        ) : (
-                            <div className="text-center z-10">
-                                <div className="w-28 h-28 bg-gray-50 rounded-full flex items-center justify-center mx-auto mb-8 text-indigo-200 border-4 border-white shadow-lg">
-                                    <Users size={56} />
-                                </div>
-                                <h2 className="text-4xl font-black text-gray-900 mb-3 tracking-tight">{t('admin.dashboard.ready')}</h2>
-                                <p className="text-gray-500 mb-10 max-w-sm mx-auto text-lg">{t('admin.dashboard.waiting', { count: waitingTickets.length })}</p>
-                                <button 
-                                    onClick={() => callNextTicket(activeCounterId)}
-                                    disabled={waitingTickets.length === 0}
-                                    className="px-12 py-6 bg-emerald-500 hover:bg-emerald-600 disabled:bg-gray-200 disabled:text-gray-400 disabled:cursor-not-allowed text-white rounded-2xl font-black text-2xl shadow-xl shadow-emerald-200 transition-all hover:-translate-y-1 active:scale-95 flex items-center gap-4 mx-auto"
-                                >
-                                    <Play fill="currentColor" size={24} /> {t('admin.dashboard.callNext')}
-                                </button>
-                            </div>
-                        )}
-                    </div>
-
-                    {/* Stats Grid */}
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                        <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-200">
-                            <div className="text-gray-400 text-xs font-bold uppercase tracking-wider mb-2">{t('admin.dashboard.stats.waiting')}</div>
-                            <div className="text-4xl font-black text-gray-900">{waitingTickets.length}</div>
-                        </div>
-                        <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-200">
-                            <div className="text-gray-400 text-xs font-bold uppercase tracking-wider mb-2">{t('admin.dashboard.stats.waitTime')}</div>
-                            <div className="text-4xl font-black text-gray-900">~{avgWaitTime} <span className="text-sm text-gray-400 font-normal">min</span></div>
-                        </div>
-                        <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-200">
-                            <div className="text-gray-400 text-xs font-bold uppercase tracking-wider mb-2">{t('admin.dashboard.stats.total')}</div>
-                            <div className="text-4xl font-black text-gray-900">{totalServed}</div>
-                        </div>
-                         <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-200">
-                            <div className="text-gray-400 text-xs font-bold uppercase tracking-wider mb-2">{t('admin.dashboard.stats.online')}</div>
-                            <div className="text-4xl font-black text-green-500">{counters.filter(c => c.isOnline).length}/{counters.length}</div>
-                        </div>
-                    </div>
-                </div>
-
-                {/* Waiting List Column */}
-                <div className="bg-white rounded-[2rem] shadow-sm border border-gray-200 flex flex-col h-[calc(100vh-140px)] sticky top-6 overflow-hidden">
-                    <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-gray-50/80 backdrop-blur-sm">
-                        <h3 className="font-bold text-gray-900 text-xl">{t('admin.queue.title')}</h3>
-                        <span className="bg-gray-200 text-gray-700 px-3 py-1 rounded-full text-sm font-bold">{waitingTickets.length}</span>
-                    </div>
-                    <div className="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar">
-                        {waitingTickets.length === 0 ? (
-                            <div className="flex flex-col items-center justify-center h-64 text-gray-400 opacity-60">
-                                <Clock size={48} className="mb-4 text-gray-300"/>
-                                <p className="font-medium">{t('admin.queue.empty')}</p>
-                            </div>
-                        ) : (
-                            waitingTickets.map((ticket) => {
-                                const service = services.find(s => s.id === ticket.serviceId);
-                                return (
-                                    <div key={ticket.id} className="group p-5 rounded-xl bg-white border border-gray-200 hover:border-indigo-400 hover:shadow-md transition-all flex items-center justify-between">
-                                        <div className="flex items-center gap-5">
-                                            <div className={`w-14 h-14 rounded-xl flex items-center justify-center font-black text-white text-xl shadow-sm ${service?.color}`}>
-                                                {service?.prefix}
-                                            </div>
-                                            <div>
-                                                <span className="block font-black text-2xl text-gray-900 tracking-tight">{ticket.number}</span>
-                                                <span className="text-xs font-bold text-gray-400 uppercase tracking-wide">{service?.name}</span>
-                                            </div>
-                                        </div>
-                                        <div className="flex items-center gap-2">
-                                             <button 
-                                                onClick={() => callSpecificTicket(ticket.id, activeCounterId)}
-                                                className="px-4 py-2 bg-indigo-50 text-indigo-700 border border-indigo-100 rounded-lg text-xs font-bold hover:bg-indigo-600 hover:text-white transition-all shadow-sm"
-                                             >
-                                                    {t('admin.queue.call')}
-                                             </button>
-                                            <button 
-                                                onClick={() => deleteTicket(ticket.id)}
-                                                    className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all" 
-                                                    title={t('admin.queue.deleteTitle')}
-                                            >
-                                                <Trash2 size={18} />
-                                            </button>
-                                        </div>
-                                    </div>
-                                );
-                            })
-                        )}
-                    </div>
-                </div>
-            </div>
-        )}
-
-        {view === 'logs' && (
-            <div className="bg-white rounded-3xl shadow-sm border border-gray-200 overflow-hidden">
-                <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-gray-50/50">
-                    <h3 className="font-bold text-gray-900 text-xl">{t('admin.logs.title')}</h3>
-                    <button onClick={handleExportCSV} className="flex items-center gap-2 text-sm text-indigo-600 hover:text-indigo-800 font-bold bg-indigo-50 px-3 py-1.5 rounded-lg hover:bg-indigo-100 transition-colors">
-                        <Download size={16} /> {t('admin.logs.export')}
-                    </button>
-                </div>
-                {isAdmin && (
-                    <div className="p-6 border-b border-gray-100 bg-gray-50/60">
-                        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-4">
-                            <div className="flex items-center gap-3">
-                                <div className="h-10 w-10 rounded-xl bg-slate-900 border border-slate-800 shadow-inner flex items-center justify-center text-indigo-200">
-                                    <Terminal size={18} />
-                                </div>
-                                <div>
-                                    <p className="font-bold text-gray-900">{t('admin.logs.live')}</p>
-                                    <p className="text-xs text-gray-500">{t('admin.logs.liveDesc')}</p>
-                                </div>
-                            </div>
-                            <div className="flex items-center gap-2">
-                                <span className="text-xs font-mono text-gray-500">{t('admin.logs.lines', { count: logs.length })}</span>
-                                <button
-                                    onClick={() => setFollowLog((prev) => !prev)}
-                                    className={`px-3 py-1.5 text-xs font-bold rounded-lg border transition-colors ${followLog ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm' : 'bg-white text-gray-700 border-gray-200 hover:border-gray-300'}`}
-                                >
-                                    {followLog ? t('admin.logs.pause') : t('admin.logs.follow')}
-                                </button>
-                            </div>
-                        </div>
-                        <div className="rounded-2xl border border-slate-800 bg-slate-950 shadow-inner overflow-hidden">
-                            <div
-                                ref={liveLogRef}
-                                className="h-[320px] overflow-y-auto p-4 space-y-2 custom-scrollbar"
-                            >
-                                {logs.length === 0 && (
-                                    <div className="text-sm text-slate-400 font-mono">{t('admin.logs.empty')}</div>
-                                )}
-                                {logs.map((log) => {
-                                    const time = new Date(log.timestamp).toLocaleTimeString('no-NO');
-                                    const badge = log.type === 'ALERT'
-                                        ? 'bg-rose-500/20 text-rose-200 border border-rose-400/30'
-                                        : log.type === 'ACTION'
-                                            ? 'bg-emerald-500/20 text-emerald-200 border border-emerald-400/30'
-                                            : 'bg-sky-500/15 text-sky-200 border border-sky-400/20';
-                                    return (
-                                        <div key={log.id} className="flex gap-3 items-start text-sm font-mono text-slate-100">
-                                            <span className="text-slate-500 shrink-0">[{time}]</span>
-                                            <span className={`px-2 py-0.5 rounded-full text-[11px] uppercase tracking-wide font-black ${badge}`}>{log.type}</span>
-                                            <span className="break-words leading-relaxed">{log.message}</span>
-                                        </div>
-                                    );
-                                })}
-                            </div>
-                        </div>
-                    </div>
-                )}
-                <table className="w-full">
-                    <thead className="bg-gray-50 text-left border-b border-gray-200">
-                        <tr>
-                            <th className="px-6 py-4 text-xs font-black text-gray-500 uppercase tracking-wider">{t('admin.logs.table.time')}</th>
-                            <th className="px-6 py-4 text-xs font-black text-gray-500 uppercase tracking-wider">{t('admin.logs.table.type')}</th>
-                            <th className="px-6 py-4 text-xs font-black text-gray-500 uppercase tracking-wider">{t('admin.logs.table.message')}</th>
-                        </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-100">
-                        {logs.map(log => (
-                            <tr key={log.id} className="hover:bg-gray-50 transition-colors">
-                                <td className="px-6 py-4 whitespace-nowrap text-sm font-mono text-gray-500 font-medium">
-                                    {new Date(log.timestamp).toLocaleTimeString()}
-                                </td>
-                                <td className="px-6 py-4 whitespace-nowrap text-sm">
-                                    <span className={`px-3 py-1 rounded-full text-xs font-bold border
-                                        ${log.type === 'INFO' ? 'bg-blue-50 text-blue-700 border-blue-100' : ''}
-                                        ${log.type === 'ACTION' ? 'bg-green-50 text-green-700 border-green-100' : ''}
-                                        ${log.type === 'ALERT' ? 'bg-red-50 text-red-700 border-red-100' : ''}
-                                    `}>
-                                        {log.type}
-                                    </span>
-                                </td>
-                                <td className="px-6 py-4 text-sm text-gray-800 font-medium">
-                                    {log.message}
-                                </td>
-                            </tr>
-                        ))}
-                    </tbody>
-                </table>
-            </div>
-        )}
-
+      <main className="flex-1 p-4 md:p-6 max-w-7xl mx-auto w-full">
+        {view === 'dashboard' && <DashboardView counterId={counterId} />}
+        {view === 'stats' && <StatsView />}
+        {view === 'logs' && <LogsView />}
         {view === 'settings' && (
-             <div className="bg-white rounded-[2rem] shadow-sm border border-gray-200 overflow-hidden flex flex-col md:flex-row min-h-[600px]">
-                {/* Settings Sidebar */}
-                <div className="w-full md:w-64 bg-gray-50 border-r border-gray-200 p-6">
-                    <h2 className="text-xs font-black text-gray-400 uppercase tracking-wider mb-6 px-2">{t('admin.settings.title')}</h2>
-                    <div className="space-y-2">
-                        {allowedSettingsTabs.includes('general') && <button onClick={() => setSettingsTab('general')} className={`w-full text-left px-4 py-3 rounded-xl text-sm font-bold transition-all ${settingsTab === 'general' ? 'bg-white text-indigo-700 shadow-md ring-1 ring-black/5' : 'text-gray-600 hover:bg-gray-200/50'}`}>{t('admin.settings.general')}</button>}
-                        {allowedSettingsTabs.includes('services') && <button onClick={() => setSettingsTab('services')} className={`w-full text-left px-4 py-3 rounded-xl text-sm font-bold transition-all ${settingsTab === 'services' ? 'bg-white text-indigo-700 shadow-md ring-1 ring-black/5' : 'text-gray-600 hover:bg-gray-200/50'}`}>{t('admin.settings.services')}</button>}
-                        {allowedSettingsTabs.includes('counters') && <button onClick={() => setSettingsTab('counters')} className={`w-full text-left px-4 py-3 rounded-xl text-sm font-bold transition-all ${settingsTab === 'counters' ? 'bg-white text-indigo-700 shadow-md ring-1 ring-black/5' : 'text-gray-600 hover:bg-gray-200/50'}`}>{t('admin.settings.counters')}</button>}
-                        {allowedSettingsTabs.includes('users') && <button onClick={() => setSettingsTab('users')} className={`w-full text-left px-4 py-3 rounded-xl text-sm font-bold transition-all ${settingsTab === 'users' ? 'bg-white text-indigo-700 shadow-md ring-1 ring-black/5' : 'text-gray-600 hover:bg-gray-200/50'}`}>{t('admin.settings.users')}</button>}
-                        {allowedSettingsTabs.includes('devices') && <button onClick={() => setSettingsTab('devices')} className={`w-full text-left px-4 py-3 rounded-xl text-sm font-bold transition-all ${settingsTab === 'devices' ? 'bg-white text-indigo-700 shadow-md ring-1 ring-black/5' : 'text-gray-600 hover:bg-gray-200/50'}`}>{t('admin.settings.devices')}</button>}
-                    </div>
-                </div>
-
-                {/* Settings Content */}
-                <div className="flex-1 p-10 bg-white">
-                    {settingsTab === 'general' && (
-                        <div className="max-w-2xl">
-                            <h3 className="text-3xl font-black text-gray-900 mb-8">{t('admin.general.title')}</h3>
-                            <div className="space-y-8">
-                                <div className="bg-white border-2 border-gray-100 rounded-2xl p-6">
-                                    <h4 className="font-bold text-gray-900 mb-4 text-lg">{t('admin.general.profile')}</h4>
-                                    <div className="space-y-4">
-                                        <label className="block text-sm font-bold text-gray-700">{t('admin.general.brandName')}</label>
-                                        <input
-                                            type="text"
-                                            value={branding.brandText}
-                                            onChange={(e) => handleBrandTextChange(e.target.value)}
-                                            className="w-full bg-white border-2 border-gray-200 rounded-xl px-4 py-3 focus:ring-4 focus:ring-indigo-100 focus:border-indigo-500 outline-none font-bold text-gray-900"
-                                        />
-                                        <div className="flex items-center gap-4">
-                                            <div className="flex items-center gap-3">
-                                                <div className="h-14 w-14 rounded-xl bg-gray-50 border border-gray-200 flex items-center justify-center overflow-hidden">
-                                                    {branding.brandLogoUrl ? (
-                                                        <img src={branding.brandLogoUrl} alt="Logo" className="h-full w-full object-contain" />
-                                                    ) : (
-                                                        <span className="text-xs text-gray-400 font-bold">{t('admin.general.noLogo')}</span>
-                                                    )}
-                                                </div>
-                                                <div className="text-xs text-gray-500">{t('admin.general.logoHelp')}</div>
-                                            </div>
-                                            <div className="flex gap-2">
-                                                <label className="px-4 py-2 bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-lg text-sm font-bold cursor-pointer hover:bg-indigo-100">
-                                                    {t('admin.general.upload')}
-                                                    <input type="file" accept="image/*" className="hidden" onChange={(e) => handleLogoUpload(e.target.files?.[0])} />
-                                                </label>
-                                                {branding.brandLogoUrl && (
-                                                    <button onClick={handleLogoRemove} className="px-4 py-2 text-sm font-bold text-gray-600 hover:text-red-600 border border-gray-200 rounded-lg bg-white">{t('admin.general.remove')}</button>
-                                                )}
-                                            </div>
-                                        </div>
-                                        <p className="text-xs text-gray-500">{t('admin.general.logoHint')}</p>
-                                    </div>
-                                </div>
-                                <div className="bg-white border-2 border-gray-100 rounded-2xl p-6 space-y-6">
-                                    <h4 className="font-bold text-gray-900 text-lg">{t('admin.general.password.title')}</h4>
-                                    <div className="grid gap-4 md:grid-cols-2">
-                                        <div className="md:col-span-1">
-                                            <label className="block text-sm font-bold text-gray-700 mb-1">{t('admin.general.password.old')}</label>
-                                            <input type="password" value={pwdOld} onChange={(e) => setPwdOld(e.target.value)} className="w-full bg-white border-2 border-gray-200 rounded-xl px-4 py-3 focus:ring-4 focus:ring-indigo-100 focus:border-indigo-500 outline-none" />
-                                        </div>
-                                        <div className="md:col-span-1">
-                                            <label className="block text-sm font-bold text-gray-700 mb-1">{t('admin.general.password.new')}</label>
-                                            <input type="password" value={pwdNew} onChange={(e) => setPwdNew(e.target.value)} className="w-full bg-white border-2 border-gray-200 rounded-xl px-4 py-3 focus:ring-4 focus:ring-indigo-100 focus:border-indigo-500 outline-none" />
-                                        </div>
-                                    </div>
-                                    <div className="mt-2 flex items-center gap-3">
-                                        <button onClick={handleChangePassword} disabled={!pwdNew || pwdStatus === 'saving'} className="px-5 py-2.5 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 disabled:opacity-60">
-                                            {pwdStatus === 'saving' ? t('admin.general.password.saving') : t('admin.general.password.update')}
-                                        </button>
-                                        {pwdStatus === 'success' && <span className="text-sm text-green-600 font-medium">{t('admin.general.password.saved')}</span>}
-                                        {pwdStatus === 'error' && <span className="text-sm text-red-600 font-medium">{t('admin.general.password.error')}</span>}
-                                    </div>
-                                </div>
-                                <div className="bg-white border-2 border-gray-100 rounded-2xl p-6">
-                                    <h4 className="font-bold text-gray-900 mb-4 text-lg">{t('admin.general.sound.title')}</h4>
-                                    <div className="space-y-4">
-                                        <label className="flex items-center justify-between">
-                                            <div>
-                                                <p className="font-bold text-gray-800">{t('admin.general.sound.kiosk')}</p>
-                                                <p className="text-xs text-gray-500">{t('admin.general.sound.kioskDesc')}</p>
-                                            </div>
-                                            <input type="checkbox" checked={soundSettings.kioskEffects} onChange={(e) => setSoundSettings({ kioskEffects: e.target.checked })} />
-                                        </label>
-                                        <label className="flex items-center justify-between">
-                                            <div>
-                                                <p className="font-bold text-gray-800">{t('admin.general.sound.admin')}</p>
-                                                <p className="text-xs text-gray-500">{t('admin.general.sound.adminDesc')}</p>
-                                            </div>
-                                            <input type="checkbox" checked={soundSettings.adminEffects} onChange={(e) => setSoundSettings({ adminEffects: e.target.checked })} />
-                                        </label>
-                                        <label className="flex items-center justify-between">
-                                            <div>
-                                                <p className="font-bold text-gray-800">{t('admin.general.sound.call')}</p>
-                                                <p className="text-xs text-gray-500">{t('admin.general.sound.callDesc')}</p>
-                                            </div>
-                                            <input type="checkbox" checked={soundSettings.callChime} onChange={(e) => setSoundSettings({ callChime: e.target.checked })} />
-                                        </label>
-                                        <label className="flex items-center justify-between">
-                                            <div>
-                                                <p className="font-bold text-gray-800">{t('admin.general.sound.voice')}</p>
-                                                <p className="text-xs text-gray-500">{t('admin.general.sound.voiceDesc')}</p>
-                                            </div>
-                                            <input type="checkbox" checked={soundSettings.callVoice} onChange={(e) => setSoundSettings({ callVoice: e.target.checked })} />
-                                        </label>
-                                    </div>
-                                </div>
-                                <div className="bg-white border-2 border-gray-100 rounded-2xl p-6">
-                                    <h4 className="font-bold text-gray-900 mb-2 text-lg">{t('admin.general.close.title')}</h4>
-                                    <p className="text-sm text-gray-600 mb-4">{t('admin.general.close.desc')}</p>
-                                    <label className="inline-flex items-center gap-3">
-                                        <input type="checkbox" checked={!isClosed} onChange={(e) => setSystemClosed(!e.target.checked)} />
-                                        <span className="text-sm font-bold text-gray-800">{isClosed ? t('admin.general.close.closed') : t('admin.general.close.open')}</span>
-                                    </label>
-                                </div>
-                                <div className="bg-white border-2 border-gray-100 rounded-2xl p-6">
-                                    <h4 className="font-bold text-gray-900 mb-2 text-lg">{t('admin.general.pin.title')}</h4>
-                                    <p className="text-sm text-gray-600 mb-4">{t('admin.general.pin.desc')}</p>
-                                    <div className="flex gap-3">
-                                        <input
-                                            type="password"
-                                            inputMode="numeric"
-                                            autoComplete="new-password"
-                                            value={pinDraft}
-                                            onChange={(e) => setPinDraft(e.target.value)}
-                                            onKeyDown={(e) => { if (e.key === 'Enter') handleKioskPinSave(); }}
-                                            className="flex-1 bg-white border-2 border-gray-200 rounded-xl px-4 py-3 focus:ring-4 focus:ring-indigo-100 focus:border-indigo-500 outline-none font-mono text-gray-900"
-                                            placeholder={t('admin.general.pin.placeholder')}
-                                        />
-                                        <button onClick={handleKioskPinSave} disabled={!pinDraft.trim()} className="px-5 py-2.5 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 disabled:opacity-60">
-                                            {t('admin.general.pin.save')}
-                                        </button>
-                                    </div>
-                                    <p className={`text-xs mt-2 font-medium ${kioskExitPinSet ? 'text-gray-500' : 'text-amber-700'}`}>
-                                        {pinSaved ? t('admin.general.pin.saved') : kioskExitPinSet ? t('admin.general.pin.set') : t('admin.general.pin.notSet')}
-                                    </p>
-                                </div>
-                                <div className="bg-white border-2 border-gray-100 rounded-2xl p-6">
-                                    <h4 className="font-bold text-gray-900 mb-2 text-lg">{t('admin.general.backup.title')}</h4>
-                                    <p className="text-sm text-gray-600 mb-4">{t('admin.general.backup.desc')}</p>
-                                    <div className="flex flex-wrap items-center gap-3 mb-4">
-                                        <button onClick={handleCreateBackup} disabled={backupStatus === 'working'} className="px-5 py-2.5 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 disabled:opacity-60">
-                                            {t('admin.general.backup.create')}
-                                        </button>
-                                        <button onClick={fetchBackups} disabled={backupsLoading} className="px-4 py-2 bg-gray-100 text-gray-700 rounded-xl font-bold hover:bg-gray-200 disabled:opacity-60">
-                                            {t('admin.general.backup.refresh')}
-                                        </button>
-                                        {backupStatus === 'working' && <span className="text-sm text-gray-500 font-medium">{t('admin.general.backup.working')}</span>}
-                                        {backupStatus === 'success' && backupMessage && <span className="text-sm text-green-600 font-medium">{backupMessage}</span>}
-                                        {backupStatus === 'error' && backupMessage && <span className="text-sm text-red-600 font-medium">{backupMessage}</span>}
-                                    </div>
-                                    <div className="border border-gray-100 rounded-xl divide-y divide-gray-100 bg-gray-50">
-                                        {backupsLoading && <div className="px-4 py-3 text-sm text-gray-500">{t('admin.general.backup.loading')}</div>}
-                                        {!backupsLoading && backups.length === 0 && (
-                                            <div className="px-4 py-3 text-sm text-gray-500">{t('admin.general.backup.none')}</div>
-                                        )}
-                                        {!backupsLoading && backups.map(b => (
-                                            <div key={b.file} className="px-4 py-3 flex items-center justify-between gap-4">
-                                                <div>
-                                                    <p className="font-bold text-gray-800 text-sm">{b.file}</p>
-                                                    <p className="text-xs text-gray-500">{new Date(b.mtime).toLocaleString()}</p>
-                                                </div>
-                                                <button
-                                                    onClick={() => handleDownloadBackup(b.file)}
-                                                    className="text-indigo-600 hover:text-indigo-800 text-sm font-bold flex items-center gap-1"
-                                                >
-                                                    <Download size={14} /> {t('admin.general.backup.download')}
-                                                </button>
-                                            </div>
-                                        ))}
-                                    </div>
-                                </div>
-                                {/* Authentication Providers */}
-                                <div className="bg-white border-2 border-gray-100 rounded-2xl p-6">
-                                    <h4 className="font-bold text-gray-900 mb-2 text-lg flex items-center gap-2">
-                                        <Shield size={20} />
-                                        Innloggingsmetoder / Authentication Providers
-                                    </h4>
-                                    <p className="text-sm text-gray-600 mb-6">
-                                        Konfigurer eksterne innloggingsmetoder som Google Workspace og OIDC. Disse innstillingene vil tre i kraft umiddelbart.
-                                    </p>
-                                    
-                                    {/* Google Workspace */}
-                                    <div className="mb-6 bg-gray-50 border border-gray-200 rounded-xl p-4">
-                                        <div className="flex items-center justify-between mb-4">
-                                            <div className="flex items-center gap-3">
-                                                <svg className="w-6 h-6" viewBox="0 0 24 24">
-                                                    <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
-                                                    <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
-                                                    <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
-                                                    <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
-                                                </svg>
-                                                <h5 className="font-bold text-gray-900">Google Workspace</h5>
-                                            </div>
-                                            <label className="inline-flex items-center gap-2">
-                                                <input 
-                                                    type="checkbox" 
-                                                    checked={authProviders.google.enabled}
-                                                    onChange={(e) => setAuthProviders({ google: { ...authProviders.google, enabled: e.target.checked } })}
-                                                    className="w-5 h-5"
-                                                />
-                                                <span className="text-sm font-bold text-gray-700">
-                                                    {authProviders.google.enabled ? 'Aktivert' : 'Deaktivert'}
-                                                </span>
-                                            </label>
-                                        </div>
-                                        
-                                        {authProviders.google.enabled && (
-                                            <div className="space-y-3 mt-4">
-                                                <div>
-                                                    <label className="block text-sm font-bold text-gray-700 mb-1">Client ID</label>
-                                                    <input
-                                                        type="text"
-                                                        value={authProviders.google.clientId}
-                                                        onChange={(e) => setAuthProviders({ google: { ...authProviders.google, clientId: e.target.value } })}
-                                                        className="w-full bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
-                                                        placeholder="your-app.apps.googleusercontent.com"
-                                                    />
-                                                </div>
-                                                <div>
-                                                    <label className="block text-sm font-bold text-gray-700 mb-1">Client Secret</label>
-                                                    <div className="flex gap-2">
-                                                        <input
-                                                            type="password"
-                                                            autoComplete="new-password"
-                                                            value={secretDrafts.google}
-                                                            onChange={(e) => setSecretDrafts(prev => ({ ...prev, google: e.target.value }))}
-                                                            className="flex-1 bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
-                                                            placeholder={authProviders.google.clientSecretSet ? '•••••••• (lagret / saved)' : 'GOCSPX-...'}
-                                                        />
-                                                        <button
-                                                            type="button"
-                                                            onClick={() => handleSecretSave('google')}
-                                                            disabled={!secretDrafts.google.trim()}
-                                                            className="px-3 py-2 bg-indigo-600 text-white text-sm font-bold rounded-lg hover:bg-indigo-700 disabled:opacity-60"
-                                                        >
-                                                            Lagre / Save
-                                                        </button>
-                                                    </div>
-                                                    <p className="text-xs text-gray-500 mt-1">
-                                                        {authProviders.google.clientSecretSet ? 'En hemmelighet er lagret. Skriv inn en ny for å erstatte den.' : 'Ingen hemmelighet lagret ennå.'}
-                                                    </p>
-                                                </div>
-                                                <div>
-                                                    <label className="block text-sm font-bold text-gray-700 mb-1">
-                                                        Tillatte domener (valgfritt, kommaseparert)
-                                                    </label>
-                                                    <input
-                                                        type="text"
-                                                        value={authProviders.google.allowedDomains?.join(', ') || ''}
-                                                        onChange={(e) => setAuthProviders({ 
-                                                            google: { 
-                                                                ...authProviders.google, 
-                                                                allowedDomains: e.target.value.split(',').map(d => d.trim()).filter(Boolean)
-                                                            } 
-                                                        })}
-                                                        className="w-full bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
-                                                        placeholder="example.com, company.no"
-                                                    />
-                                                    <p className="text-xs text-gray-500 mt-1">La stå tom for å tillate alle Google-kontoer</p>
-                                                </div>
-                                                <div className="flex items-center gap-4">
-                                                    <label className="flex items-center gap-2">
-                                                        <input 
-                                                            type="checkbox" 
-                                                            checked={authProviders.google.autoProvision}
-                                                            onChange={(e) => setAuthProviders({ google: { ...authProviders.google, autoProvision: e.target.checked } })}
-                                                        />
-                                                        <span className="text-sm font-bold text-gray-700">Auto-opprett brukere</span>
-                                                    </label>
-                                                    {authProviders.google.autoProvision && (
-                                                        <select
-                                                            value={authProviders.google.defaultRole}
-                                                            onChange={(e) => setAuthProviders({ google: { ...authProviders.google, defaultRole: e.target.value as 'ADMIN' | 'OPERATOR' } })}
-                                                            className="px-3 py-1 border border-gray-200 rounded-lg text-sm font-bold"
-                                                        >
-                                                            <option value="OPERATOR">OPERATOR</option>
-                                                            <option value="ADMIN">ADMIN</option>
-                                                        </select>
-                                                    )}
-                                                </div>
-                                            </div>
-                                        )}
-                                    </div>
-
-                                    {/* OIDC Provider */}
-                                    <div className="bg-gray-50 border border-gray-200 rounded-xl p-4">
-                                        <div className="flex items-center justify-between mb-4">
-                                            <div className="flex items-center gap-3">
-                                                <Lock size={24} className="text-indigo-600" />
-                                                <div>
-                                                    <h5 className="font-bold text-gray-900">OIDC Provider</h5>
-                                                    <p className="text-xs text-gray-500">Entra ID (Azure AD), Keycloak, Auth0, Okta, etc.</p>
-                                                </div>
-                                            </div>
-                                            <label className="inline-flex items-center gap-2">
-                                                <input 
-                                                    type="checkbox" 
-                                                    checked={authProviders.oidc.enabled}
-                                                    onChange={(e) => setAuthProviders({ oidc: { ...authProviders.oidc, enabled: e.target.checked } })}
-                                                    className="w-5 h-5"
-                                                />
-                                                <span className="text-sm font-bold text-gray-700">
-                                                    {authProviders.oidc.enabled ? 'Aktivert' : 'Deaktivert'}
-                                                </span>
-                                            </label>
-                                        </div>
-                                        
-                                        {authProviders.oidc.enabled && (
-                                            <div className="space-y-3 mt-4">
-                                                <div>
-                                                    <label className="block text-sm font-bold text-gray-700 mb-1">Issuer URL</label>
-                                                    <input
-                                                        type="text"
-                                                        value={authProviders.oidc.issuerUrl}
-                                                        onChange={(e) => setAuthProviders({ oidc: { ...authProviders.oidc, issuerUrl: e.target.value } })}
-                                                        className="w-full bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
-                                                        placeholder="https://login.microsoftonline.com/{tenant-id}/v2.0"
-                                                    />
-                                                    <p className="text-xs text-gray-500 mt-1">Discovery URL for OIDC provider</p>
-                                                </div>
-                                                <div>
-                                                    <label className="block text-sm font-bold text-gray-700 mb-1">Client ID</label>
-                                                    <input
-                                                        type="text"
-                                                        value={authProviders.oidc.clientId}
-                                                        onChange={(e) => setAuthProviders({ oidc: { ...authProviders.oidc, clientId: e.target.value } })}
-                                                        className="w-full bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
-                                                        placeholder="application-id"
-                                                    />
-                                                </div>
-                                                <div>
-                                                    <label className="block text-sm font-bold text-gray-700 mb-1">Client Secret</label>
-                                                    <div className="flex gap-2">
-                                                        <input
-                                                            type="password"
-                                                            autoComplete="new-password"
-                                                            value={secretDrafts.oidc}
-                                                            onChange={(e) => setSecretDrafts(prev => ({ ...prev, oidc: e.target.value }))}
-                                                            className="flex-1 bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
-                                                            placeholder={authProviders.oidc.clientSecretSet ? '•••••••• (lagret / saved)' : 'client-secret'}
-                                                        />
-                                                        <button
-                                                            type="button"
-                                                            onClick={() => handleSecretSave('oidc')}
-                                                            disabled={!secretDrafts.oidc.trim()}
-                                                            className="px-3 py-2 bg-indigo-600 text-white text-sm font-bold rounded-lg hover:bg-indigo-700 disabled:opacity-60"
-                                                        >
-                                                            Lagre / Save
-                                                        </button>
-                                                    </div>
-                                                    <p className="text-xs text-gray-500 mt-1">
-                                                        {authProviders.oidc.clientSecretSet ? 'En hemmelighet er lagret. Skriv inn en ny for å erstatte den.' : 'Ingen hemmelighet lagret ennå.'}
-                                                    </p>
-                                                </div>
-                                                <div className="flex items-center gap-4">
-                                                    <label className="flex items-center gap-2">
-                                                        <input 
-                                                            type="checkbox" 
-                                                            checked={authProviders.oidc.autoProvision}
-                                                            onChange={(e) => setAuthProviders({ oidc: { ...authProviders.oidc, autoProvision: e.target.checked } })}
-                                                        />
-                                                        <span className="text-sm font-bold text-gray-700">Auto-opprett brukere</span>
-                                                    </label>
-                                                    {authProviders.oidc.autoProvision && (
-                                                        <select
-                                                            value={authProviders.oidc.defaultRole}
-                                                            onChange={(e) => setAuthProviders({ oidc: { ...authProviders.oidc, defaultRole: e.target.value as 'ADMIN' | 'OPERATOR' } })}
-                                                            className="px-3 py-1 border border-gray-200 rounded-lg text-sm font-bold"
-                                                        >
-                                                            <option value="OPERATOR">OPERATOR</option>
-                                                            <option value="ADMIN">ADMIN</option>
-                                                        </select>
-                                                    )}
-                                                </div>
-                                                <label className="flex items-start gap-2">
-                                                    <input
-                                                        type="checkbox"
-                                                        className="mt-1"
-                                                        checked={authProviders.oidc.requireVerifiedEmail !== false}
-                                                        onChange={(e) => setAuthProviders({ oidc: { ...authProviders.oidc, requireVerifiedEmail: e.target.checked } })}
-                                                    />
-                                                    <span className="text-sm text-gray-700">
-                                                        <span className="font-bold">Krev verifisert e-post (anbefalt)</span><br />
-                                                        <span className="text-xs text-gray-500">Kontoer kobles/opprettes via e-post bare når leverandøren har verifisert adressen (email_verified). Slå av kun hvis leverandøren din (f.eks. Entra ID) ikke sender dette feltet og du stoler på alle e-postadresser der.</span>
-                                                    </span>
-                                                </label>
-                                            </div>
-                                        )}
-                                    </div>
-                                    
-                                    <div className="mt-4 bg-blue-50 border border-blue-200 rounded-lg p-3">
-                                        <p className="text-xs text-blue-800">
-                                            <strong>Callback URLs:</strong><br/>
-                                            Google: <code className="bg-blue-100 px-1 py-0.5 rounded">{window.location.origin}/auth/google/callback</code><br/>
-                                            OIDC: <code className="bg-blue-100 px-1 py-0.5 rounded">{window.location.origin}/auth/oidc/callback</code>
-                                        </p>
-                                    </div>
-                                </div>
-                                <div className="bg-yellow-50 border-2 border-yellow-100 rounded-2xl p-6">
-                                    <h4 className="font-bold text-yellow-900 mb-2 text-lg">{t('admin.general.reset.title')}</h4>
-                                    <p className="text-sm text-yellow-800 mb-6 font-medium">{t('admin.general.reset.desc')}</p>
-                                    <button onClick={resetSystem} className="px-6 py-3 bg-yellow-500 hover:bg-yellow-600 text-white rounded-xl font-bold text-sm shadow-md transition-colors">{t('admin.general.reset.button')}</button>
-                                </div>
-
-                                <div>
-                                    <label className="block text-sm font-bold text-gray-700 mb-3">{t('admin.general.marquee.label')}</label>
-                                    <div className="flex gap-4">
-                                        <input 
-                                            type="text" 
-                                            value={publicMessage}
-                                            onChange={(e) => setPublicMessage(e.target.value)}
-                                            placeholder={t('admin.general.marquee.placeholder')} 
-                                            className="flex-1 bg-white border-2 border-gray-200 rounded-xl px-4 py-3 focus:ring-4 focus:ring-indigo-100 focus:border-indigo-500 outline-none transition-all font-medium text-gray-900"
-                                        />
-                                    </div>
-                                    <p className="text-xs text-gray-500 mt-2 font-medium">{t('admin.general.marquee.help')}</p>
-                                </div>
-                            </div>
-                        </div>
-                    )}
-
-                    {settingsTab === 'services' && (
-                        <div>
-                            <div className="flex justify-between items-center mb-8">
-                                <h3 className="text-3xl font-black text-gray-900">{t('admin.services.title')}</h3>
-                            </div>
-                            
-                            {/* Add Service Form */}
-                            <div className="bg-gray-50 p-6 rounded-2xl border border-gray-200 mb-8 grid grid-cols-1 md:grid-cols-5 gap-4 items-end shadow-sm">
-                                <div>
-                                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">{t('admin.services.name')}</label>
-                                    <input type="text" value={newService.name} onChange={e => setNewService({...newService, name: e.target.value})} className="w-full border-2 border-gray-200 rounded-xl px-4 py-2.5 focus:border-indigo-500 outline-none font-bold text-gray-800 bg-white" placeholder={t('admin.services.namePlaceholder')} />
-                                </div>
-                                <div>
-                                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">{t('admin.services.prefix')}</label>
-                                    <input type="text" value={newService.prefix} onChange={e => setNewService({...newService, prefix: e.target.value.toUpperCase()})} className="w-full border-2 border-gray-200 rounded-xl px-4 py-2.5 focus:border-indigo-500 outline-none font-bold text-gray-800 bg-white" placeholder={t('admin.services.prefixPlaceholder')} maxLength={2} />
-                                </div>
-                                <div>
-                                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">{t('admin.services.eta')}</label>
-                                    <input type="number" min={1} value={newService.estimatedTimePerPersonMinutes ?? 5} onChange={e => setNewService({...newService, estimatedTimePerPersonMinutes: Number(e.target.value) || 1})} className="w-full border-2 border-gray-200 rounded-xl px-4 py-2.5 focus:border-indigo-500 outline-none font-bold text-gray-800 bg-white" />
-                                </div>
-                                <div>
-                                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">{t('admin.services.priority')}</label>
-                                    <input type="number" min={1} value={newService.priority ?? 1} onChange={e => setNewService({...newService, priority: Number(e.target.value) || 1})} className="w-full border-2 border-gray-200 rounded-xl px-4 py-2.5 focus:border-indigo-500 outline-none font-bold text-gray-800 bg-white" />
-                                </div>
-                                <div>
-                                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">{t('admin.services.color')}</label>
-                                    <select value={newService.color} onChange={e => setNewService({...newService, color: e.target.value})} className="w-full border-2 border-gray-200 rounded-xl px-4 py-2.5 focus:border-indigo-500 outline-none font-bold text-gray-800 bg-white cursor-pointer">
-                                        <option value="bg-blue-600">{t('admin.services.color.blue')}</option>
-                                        <option value="bg-red-600">{t('admin.services.color.red')}</option>
-                                        <option value="bg-green-600">{t('admin.services.color.green')}</option>
-                                        <option value="bg-purple-600">{t('admin.services.color.purple')}</option>
-                                        <option value="bg-yellow-500">{t('admin.services.color.yellow')}</option>
-                                        <option value="bg-pink-600">{t('admin.services.color.pink')}</option>
-                                        <option value="bg-gray-600">{t('admin.services.color.gray')}</option>
-                                    </select>
-                                </div>
-                                <button onClick={handleCreateService} className="bg-indigo-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-indigo-700 shadow-lg shadow-indigo-200 transition-all h-[46px]">{t('admin.services.add')}</button>
-                            </div>
-
-                            <div className="space-y-3">
-                                {services.map(s => (
-                                    <div key={s.id} className="p-5 bg-white border-2 border-gray-100 rounded-2xl hover:border-indigo-200 transition-colors">
-                                        <div className="flex items-start justify-between gap-4">
-                                            <div className="flex items-center gap-5">
-                                                <div className={`w-12 h-12 rounded-xl ${s.color} text-white flex items-center justify-center font-black text-lg shadow-sm`}>{s.prefix}</div>
-                                                <div>
-                                                    <p className="font-bold text-gray-900 text-lg">{s.name}</p>
-                                                    <p className="text-xs text-gray-500 font-bold uppercase tracking-wide">{t('admin.services.etaLabel', { minutes: s.estimatedTimePerPersonMinutes })}</p>
-                                                </div>
-                                            </div>
-                                            <div className="flex items-center gap-2">
-                                                <button onClick={() => removeService(s.id)} className="text-gray-300 hover:text-red-500 p-3 hover:bg-red-50 rounded-lg transition-all"><Trash2 size={20} /></button>
-                                            </div>
-                                        </div>
-                                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
-                                            <div>
-                                                <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1">{t('admin.services.eta')}</label>
-                                                <input
-                                                    type="number"
-                                                    min={1}
-                                                    value={getServiceDraftEtaValue(s.id, s.estimatedTimePerPersonMinutes || 1)}
-                                                    onChange={e => setServiceEtaDraft(s.id, e.target.value)}
-                                                    onBlur={() => saveServiceEta(s.id)}
-                                                    onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); saveServiceEta(s.id); } }}
-                                                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
-                                                />
-                                            </div>
-                                            <div>
-                                                <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1">{t('admin.services.priority')}</label>
-                                                <input type="number" min={1} defaultValue={s.priority ?? 1} onBlur={e => updateService(s.id, { priority: Number(e.target.value) || 1 })} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" />
-                                                <p className="text-[11px] text-gray-400 mt-1">{t('admin.services.prioHelp')}</p>
-                                            </div>
-                                            <div className="flex items-end">
-                                                <label className="flex items-center gap-2 text-sm font-bold text-gray-600">
-                                                    <input type="checkbox" defaultChecked={s.isOpen !== false} onChange={e => updateService(s.id, { isOpen: e.target.checked })} className="h-4 w-4" />
-                                                    {t('admin.services.open')}
-                                                </label>
-                                            </div>
-                                        </div>
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
-                    )}
-
-                                  {settingsTab === 'counters' && (
-                                 <div>
-                                     <h3 className="text-3xl font-black text-gray-900 mb-8">{t('admin.counters.title')}</h3>
-                            
-                            <div className="flex gap-4 mb-10">
-                                <input type="text" value={newCounterName} onChange={e => setNewCounterName(e.target.value)} className="border-2 border-gray-200 rounded-xl px-4 py-3 w-72 focus:border-indigo-500 outline-none font-bold text-gray-800 bg-white" placeholder={t('admin.counters.placeholder')} />
-                                <button onClick={handleCreateCounter} className="bg-indigo-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-indigo-700 shadow-md">{t('admin.counters.create')}</button>
-                            </div>
-
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                                {counters.map(c => (
-                                    <div key={c.id} className="p-6 bg-white border-2 border-gray-100 rounded-2xl hover:border-gray-300 transition-all shadow-sm">
-                                        <div className="flex justify-between items-start mb-6">
-                                            <h4 className="font-bold text-xl text-gray-900">{c.name}</h4>
-                                            <div className="flex gap-3">
-                                                <button onClick={() => updateCounterStatus(c.id, !c.isOnline)} className={`px-3 py-1.5 rounded-lg text-xs font-bold uppercase tracking-wide transition-colors ${c.isOnline ? 'bg-green-100 text-green-700 hover:bg-green-200' : 'bg-red-100 text-red-700 hover:bg-red-200'}`}>
-                                                    {c.isOnline ? t('admin.counters.online') : t('admin.counters.offline')}
-                                                </button>
-                                                <button onClick={() => removeCounter(c.id)} className="text-gray-300 hover:text-red-500"><X size={20} /></button>
-                                            </div>
-                                        </div>
-                                        <p className="text-xs font-black text-gray-400 uppercase tracking-widest mb-3">{t('admin.counters.handles')}</p>
-                                        <div className="flex flex-wrap gap-2">
-                                            {services.map(s => {
-                                                const isActive = c.activeServiceIds.includes(s.id);
-                                                return (
-                                                    <button 
-                                                        key={s.id} 
-                                                        onClick={() => toggleServiceForCounter(c.id, s.id)}
-                                                        className={`px-3 py-1.5 rounded-lg border-2 text-xs font-bold select-none transition-all ${isActive ? 'bg-indigo-50 border-indigo-200 text-indigo-700 hover:bg-indigo-100' : 'bg-gray-50 border-gray-100 text-gray-400 hover:bg-gray-100 hover:text-gray-600'}`}
-                                                    >
-                                                        {s.name}
-                                                    </button>
-                                                )
-                                            })}
-                                        </div>
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
-                    )}
-
-                    {settingsTab === 'users' && (
-                        <div>
-                            <h3 className="text-3xl font-black text-gray-900 mb-8">{t('admin.users.title')}</h3>
-                             <div className="bg-gray-50 p-6 rounded-2xl border border-gray-200 mb-10 grid grid-cols-1 md:grid-cols-5 gap-4 items-end shadow-sm">
-                                <div>
-                                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">{t('admin.users.username')}</label>
-                                    <input type="text" value={newUser.username} onChange={e => setNewUser({...newUser, username: e.target.value})} className="w-full border-2 border-gray-200 rounded-xl px-4 py-2.5 bg-white font-bold focus:border-indigo-500 outline-none" placeholder={t('admin.users.usernamePlaceholder')} />
-                                </div>
-                                <div>
-                                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">{t('admin.users.name')}</label>
-                                    <input type="text" value={newUser.name} onChange={e => setNewUser({...newUser, name: e.target.value})} className="w-full border-2 border-gray-200 rounded-xl px-4 py-2.5 bg-white font-bold focus:border-indigo-500 outline-none" placeholder={t('admin.users.namePlaceholder')} />
-                                </div>
-                                <div>
-                                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">{t('admin.users.role')}</label>
-                                    <select value={newUser.role} onChange={e => setNewUser({...newUser, role: e.target.value as 'ADMIN' | 'OPERATOR'})} className="w-full border-2 border-gray-200 rounded-xl px-4 py-2.5 bg-white font-bold focus:border-indigo-500 outline-none">
-                                        <option value="OPERATOR">{t('role.operator')}</option>
-                                        <option value="ADMIN">{t('role.admin')}</option>
-                                    </select>
-                                </div>
-                                <div>
-                                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">{t('admin.users.password')}</label>
-                                    <input type="password" autoComplete="new-password" value={newUser.password} onChange={e => setNewUser({...newUser, password: e.target.value})} className="w-full border-2 border-gray-200 rounded-xl px-4 py-2.5 bg-white font-bold focus:border-indigo-500 outline-none" placeholder={t('admin.users.setPasswordPlaceholder')} />
-                                    <label className="flex items-center gap-2 mt-2 text-xs font-bold text-gray-600">
-                                        <input type="checkbox" checked={newUser.mustChangePassword} onChange={e => setNewUser({...newUser, mustChangePassword: e.target.checked})} />
-                                        {t('admin.users.mustChange')}
-                                    </label>
-                                </div>
-                                <button onClick={handleCreateUser} className="bg-indigo-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-indigo-700 shadow-md h-[46px] disabled:opacity-60" disabled={!newUser.username || !newUser.password}>
-                                    {t('admin.users.add')}
-                                </button>
-                            </div>
-
-                            <table className="w-full">
-                                <thead>
-                                    <tr className="text-left text-xs font-black text-gray-400 uppercase tracking-wider border-b-2 border-gray-100">
-                                        <th className="pb-4 pl-4">{t('admin.users.username')}</th>
-                                        <th className="pb-4">{t('admin.users.name')}</th>
-                                        <th className="pb-4">{t('admin.users.role')}</th>
-                                        <th className="pb-4">{t('admin.users.password')}</th>
-                                        <th className="pb-4 text-right pr-4">{t('admin.users.action')}</th>
-                                    </tr>
-                                </thead>
-                                <tbody className="divide-y divide-gray-100">
-                                    {users.map(u => {
-                                        const draft = getUserDraft(u.id);
-                                        return (
-                                        <tr key={u.id} className="hover:bg-gray-50 transition-colors">
-                                            <td className="py-3 pl-4">
-                                                <input value={draft.username} onChange={e => handleUserDraftChange(u.id, 'username', e.target.value)} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" />
-                                            </td>
-                                            <td className="py-3">
-                                                <input value={draft.name} onChange={e => handleUserDraftChange(u.id, 'name', e.target.value)} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" />
-                                            </td>
-                                            <td className="py-3">
-                                                <select value={draft.role} onChange={e => handleUserDraftChange(u.id, 'role', e.target.value)} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
-                                                    <option value="OPERATOR">{t('role.operator')}</option>
-                                                    <option value="ADMIN">{t('role.admin')}</option>
-                                                </select>
-                                            </td>
-                                            <td className="py-3">
-                                                <input type="password" value={draft.password || ''} onChange={e => handleUserDraftChange(u.id, 'password', e.target.value)} placeholder={t('admin.users.passwordPlaceholder')} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" />
-                                            </td>
-                                            <td className="py-3 pr-4 text-right flex items-center justify-end gap-3">
-                                                <button onClick={() => handleSaveUser(u.id)} className="text-indigo-600 hover:text-indigo-800 text-sm font-bold">{t('admin.users.save')}</button>
-                                                <button
-                                                    onClick={() => {
-                                                        if (u.role === 'ADMIN' && adminCount <= 1) {
-                                                            alert(t('admin.users.cannotDeleteAdmin'));
-                                                            return;
-                                                        }
-                                                        removeUser(u.id);
-                                                    }}
-                                                    className={`text-sm font-bold ${u.role === 'ADMIN' && adminCount <= 1 ? 'text-gray-300 cursor-not-allowed' : 'text-red-400 hover:text-red-600'}`}
-                                                    disabled={u.role === 'ADMIN' && adminCount <= 1}
-                                                >
-                                                    {t('admin.users.delete')}
-                                                </button>
-                                            </td>
-                                        </tr>
-                                    )})}
-                                </tbody>
-                            </table>
-                        </div>
-                    )}
-
-                    {settingsTab === 'devices' && (
-                        <div>
-                            <h3 className="text-3xl font-black text-gray-900 mb-8">{t('admin.devices.title')}</h3>
-                             
-                             {/* Add Printer Form */}
-                             <div className="bg-gray-50 p-6 rounded-2xl border border-gray-200 mb-10 flex flex-col gap-6 shadow-sm">
-                                <h4 className="font-bold text-gray-600 uppercase tracking-wide text-xs">{t('admin.devices.addPrinter')}</h4>
-                                <div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
-                                    <div className="md:col-span-1">
-                                        <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">{t('admin.devices.printerName')}</label>
-                                        <input type="text" value={newPrinter.name} onChange={e => setNewPrinter({...newPrinter, name: e.target.value})} className="w-full border-2 border-gray-200 rounded-xl px-4 py-2.5 bg-white font-bold focus:border-indigo-500 outline-none" placeholder={t('admin.devices.printerNamePlaceholder')} />
-                                    </div>
-                                    <div className="md:col-span-2">
-                                        <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">{t('admin.devices.printerIp')}</label>
-                                        <input type="text" value={newPrinter.ipAddress} onChange={e => setNewPrinter({...newPrinter, ipAddress: e.target.value})} className="w-full border-2 border-gray-200 rounded-xl px-4 py-2.5 bg-white font-mono font-medium focus:border-indigo-500 outline-none" placeholder={t('admin.devices.printerIpPlaceholder')} />
-                                    </div>
-                                    <button onClick={handleAddPrinter} className="bg-indigo-600 text-white px-6 py-2.5 rounded-xl font-bold hover:bg-indigo-700 shadow-md h-[46px] w-full">{t('admin.devices.printerAdd')}</button>
-                                </div>
-                            </div>
-
-                            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                                {/* Printer List */}
-                                <div className="bg-white border-2 border-gray-100 rounded-2xl p-6">
-                                    <h4 className="font-bold text-lg text-gray-900 mb-4 flex items-center gap-2"><PrinterIcon size={20} /> {t('admin.devices.configuredPrinters')}</h4>
-                                    {printers.length === 0 ? <p className="text-gray-400 italic text-sm">{t('admin.devices.noPrinters')}</p> : (
-                                        <ul className="space-y-3">
-                                            {printers.map(p => (
-                                                <li key={p.id} className="flex justify-between items-center p-3 bg-gray-50 rounded-lg border border-gray-100">
-                                                    <div>
-                                                        <p className="font-bold text-gray-800">{p.name}</p>
-                                                        <p className="text-xs text-gray-500 font-mono">{p.ipAddress}:{p.port}</p>
-                                                    </div>
-                                                    <div className="flex items-center gap-2">
-                                                        <span className={`px-2 py-1 text-[10px] font-bold uppercase rounded ${p.status === 'ONLINE' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-                                                            {p.status === 'ONLINE' ? t('admin.devices.online') : t('admin.devices.offline')}
-                                                        </span>
-                                                        <button onClick={() => removePrinter(p.id)} className="text-gray-300 hover:text-red-500"><X size={16} /></button>
-                                                    </div>
-                                                </li>
-                                            ))}
-                                        </ul>
-                                    )}
-                                </div>
-
-                                {/* Kiosk List */}
-                                <div className="bg-white border-2 border-gray-100 rounded-2xl p-6">
-                                    <h4 className="font-bold text-lg text-gray-900 mb-4 flex items-center gap-2"><Monitor size={20} /> {t('admin.devices.activeKiosks')}</h4>
-                                    {kiosks.length === 0 ? <p className="text-gray-400 italic text-sm">{t('admin.devices.noKiosks')}</p> : (
-                                        <ul className="space-y-4">
-                                            {kiosks.map(k => (
-                                                <li key={k.id} className="p-4 bg-gray-50 rounded-xl border border-gray-100">
-                                                    {(() => {
-                                                        const online = Date.now() - k.lastSeen < 15000;
-                                                        return (
-                                                            <>
-                                                                <div className="flex justify-between items-start mb-3">
-                                                                    <div>
-                                                                        <p className="font-bold text-gray-800">{k.name}</p>
-                                                                        <p className="text-xs text-gray-400">{t('admin.devices.lastSeen')}: {new Date(k.lastSeen).toLocaleTimeString()}</p>
-                                                                    </div>
-                                                                    <div className="flex items-center gap-2">
-                                                                        <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-[11px] font-bold uppercase tracking-wide ${online ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-                                                                            <span className={`h-2 w-2 rounded-full ${online ? 'bg-green-500' : 'bg-red-500'}`}></span>
-                                                                            {online ? t('admin.devices.online') : t('admin.devices.offline')}
-                                                                        </span>
-                                                                        <button onClick={() => removeKiosk(k.id)} className="text-gray-400 hover:text-red-600" title={t('admin.devices.removeKiosk')}>
-                                                                            <Trash2 size={16} />
-                                                                        </button>
-                                                                    </div>
-                                                                </div>
-                                                                <div>
-                                                                    <label className="block text-xs font-bold text-gray-400 uppercase tracking-wide mb-1">{t('admin.devices.assignedPrinter')}</label>
-                                                                    <select 
-                                                                        value={k.assignedPrinterId || ''} 
-                                                                        onChange={(e) => assignPrinterToKiosk(k.id, e.target.value)}
-                                                                        className="w-full text-sm border-gray-300 rounded-lg shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
-                                                                    >
-                                                                        <option value="">{t('admin.devices.noneSelected')}</option>
-                                                                        {printers.map(p => (
-                                                                            <option key={p.id} value={p.id}>{p.name} ({p.ipAddress})</option>
-                                                                        ))}
-                                                                    </select>
-                                                                </div>
-                                                            </>
-                                                        );
-                                                    })()}
-                                                </li>
-                                            ))}
-                                        </ul>
-                                    )}
-                                </div>
-                            </div>
-
-                            {/* Counter Display List */}
-                            <div className="bg-white border-2 border-gray-100 rounded-2xl p-6 mt-8">
-                                <h4 className="font-bold text-lg text-gray-900 mb-4 flex items-center gap-2"><Monitor size={20} /> {t('admin.devices.counterDisplays')}</h4>
-                                {counterDisplays.length === 0 ? <p className="text-gray-400 italic text-sm">{t('admin.devices.noCounterDisplays')}</p> : (
-                                    <ul className="space-y-4">
-                                        {counterDisplays.map(d => {
-                                            const online = Date.now() - d.lastSeen < 15000;
-                                            return (
-                                                <li key={d.id} className="p-4 bg-gray-50 rounded-xl border border-gray-100">
-                                                    <div className="flex justify-between items-start mb-3">
-                                                        <div>
-                                                            <p className="font-bold text-gray-800">{d.name}</p>
-                                                            <p className="text-[11px] font-mono text-gray-500">ID: {d.id.slice(-4).toUpperCase()}</p>
-                                                            <p className="text-xs text-gray-400">{t('admin.devices.lastSeen')}: {new Date(d.lastSeen).toLocaleTimeString()}</p>
-                                                        </div>
-                                                        <div className="flex items-center gap-2">
-                                                            <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-[11px] font-bold uppercase tracking-wide ${online ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-                                                                <span className={`h-2 w-2 rounded-full ${online ? 'bg-green-500' : 'bg-red-500'}`}></span>
-                                                                {online ? t('admin.devices.online') : t('admin.devices.offline')}
-                                                            </span>
-                                                            <button onClick={() => removeCounterDisplay(d.id)} className="text-gray-400 hover:text-red-600" title={t('admin.devices.removeDisplay')}>
-                                                                <Trash2 size={16} />
-                                                            </button>
-                                                        </div>
-                                                    </div>
-                                                                <div>
-                                                                    <label className="block text-xs font-bold text-gray-400 uppercase tracking-wide mb-1">{t('admin.devices.assignedCounter')}</label>
-                                                                    <select
-                                                                        value={d.counterId || ''}
-                                                                        onChange={(e) => assignCounterDisplay(d.id, e.target.value || undefined)}
-                                                                        className="w-full text-sm border-gray-300 rounded-lg shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
-                                                                    >
-                                                                        <option value="">{t('admin.devices.notAssigned')}</option>
-                                                                        {counters.map(c => (
-                                                                            <option key={c.id} value={c.id}>{c.name}</option>
-                                                                        ))}
-                                                                    </select>
-                                                                    <p className="text-[11px] text-gray-400 mt-1">{t('admin.devices.assignHint')}</p>
-                                                                </div>
-                                                                <div className="mt-4">
-                                                                    <label className="block text-xs font-bold text-gray-400 uppercase tracking-wide mb-1">{t('admin.devices.messageLabel')}</label>
-                                                                    <div className="flex gap-2">
-                                                                        <input
-                                                                            type="text"
-                                                                            value={counterDisplayMessages[d.id] ?? ''}
-                                                                            onChange={(e) => handleCounterDisplayMessageChange(d.id, e.target.value)}
-                                                                            onBlur={() => handleCounterDisplayMessageSave(d.id)}
-                                                                            onKeyDown={(e) => {
-                                                                                if (e.key === 'Enter') {
-                                                                                    handleCounterDisplayMessageSave(d.id);
-                                                                                }
-                                                                            }}
-                                                                            placeholder={t('admin.devices.messagePlaceholder')}
-                                                                            className="flex-1 text-sm border-gray-300 rounded-lg shadow-sm focus:border-indigo-500 focus:ring-indigo-500 px-3 py-2"
-                                                                        />
-                                                                        <button
-                                                                            onClick={() => handleCounterDisplayMessageSave(d.id)}
-                                                                            className="px-4 py-2 bg-indigo-600 text-white text-sm font-bold rounded-lg shadow-sm hover:bg-indigo-700"
-                                                                        >
-                                                                            {t('common.save')}
-                                                                        </button>
-                                                                    </div>
-                                                                    <p className="text-[11px] text-gray-400 mt-1">{t('admin.devices.messageHelp')}</p>
-                                                                </div>
-                                                </li>
-                                            );
-                                        })}
-                                    </ul>
-                                )}
-                            </div>
-                        </div>
-                    )}
-                </div>
-             </div>
+          <div className="bg-white rounded-[2rem] shadow-sm border border-gray-200 overflow-hidden flex flex-col md:flex-row min-h-[600px]">
+            <aside className="w-full md:w-60 bg-gray-50 border-b md:border-b-0 md:border-r border-gray-200 p-3 md:p-6">
+              <h2 className="hidden md:block text-xs font-black text-gray-500 uppercase tracking-wider mb-4 px-2">{t('admin.settings.title')}</h2>
+              <div className="flex md:flex-col gap-1 overflow-x-auto">
+                {tabs.map((tab) => (
+                  <button
+                    key={tab}
+                    onClick={() => setSettingsTab(tab)}
+                    aria-current={settingsTab === tab ? 'page' : undefined}
+                    className={`text-left px-4 py-2.5 rounded-xl text-sm font-bold transition-all whitespace-nowrap ${settingsTab === tab ? 'bg-white text-brand-700 shadow-md ring-1 ring-black/5' : 'text-gray-600 hover:bg-gray-200/50'}`}
+                  >
+                    {t(`admin.settings.${tab}`)}
+                  </button>
+                ))}
+              </div>
+            </aside>
+            <div className="flex-1 p-4 md:p-8 bg-white min-w-0">
+              <SettingsComponent />
+            </div>
+          </div>
         )}
       </main>
     </div>

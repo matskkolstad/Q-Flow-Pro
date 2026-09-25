@@ -7,7 +7,7 @@ const SECRET = 'very-secret-client-secret';
 const fullState = () => ({
   services: [{ id: 's1', name: 'Kundeservice', prefix: 'K' }],
   counters: [{ id: 'c1', name: 'Skranke 1', activeServiceIds: ['s1'], isOnline: true }],
-  tickets: [{ id: 't1', number: 'K001', serviceId: 's1', status: 'WAITING', createdAt: 1, internalNote: 'x' }],
+  tickets: [{ id: 't1', number: 'K001', serviceId: 's1', status: 'WAITING', createdAt: 1, internalNote: 'x', ownerKeyHash: 'secret-owner-hash', servedBy: 'u1' }],
   counterDisplays: [{ id: 'cd_1', name: 'Skjerm', counterId: 'c1', message: 'Hei', lastSeen: 1 }],
   users: [{ id: 'u1', name: 'Admin', username: 'admin', role: 'ADMIN', passwordHash: '$2a$10$abc', pinCode: '1234' }],
   sessions: { abc: { userId: 'u1', expiresAt: Date.now() + 1000 } },
@@ -19,7 +19,8 @@ const fullState = () => ({
   logs: [{ id: 'l1', message: 'hei', type: 'INFO', timestamp: 1 }],
   isClosed: false,
   publicMessage: 'Velkommen',
-  branding: { brandText: 'Q', brandLogoUrl: '' },
+  branding: { brandText: 'Q', brandLogoUrl: '', brandLogoData: 'data:image/png;base64,SECRETLOGODATA', logoVersion: 'abc' },
+  settings: { kiosk: { autoReturnSeconds: 15 }, schedule: { enabled: false }, publicUrl: '', announcements: { no: 'x', en: 'y' }, backup: { enabled: true, time: '02:30' } },
   soundSettings: { callChime: true },
   authProviders: {
     google: { enabled: true, clientId: 'id', clientSecret: SECRET, allowedDomains: [], autoProvision: false, defaultRole: 'OPERATOR' },
@@ -28,7 +29,7 @@ const fullState = () => ({
 });
 
 // JSON keys (quoted) and values that must never be sent to a client
-const SENSITIVE = ['"passwordHash"', '"pinCode"', '"sessions"', '"devices"', '"kioskExitPin"', '"kioskExitPinHash"', '"clientSecret"', SECRET, '$2a$'];
+const SENSITIVE = ['"passwordHash"', '"pinCode"', '"sessions"', '"devices"', '"kioskExitPin"', '"kioskExitPinHash"', '"clientSecret"', SECRET, '$2a$', 'secret-owner-hash', '"servedBy"', 'SECRETLOGODATA'];
 
 const assertNoSecrets = (view) => {
   const json = JSON.stringify(view);
@@ -38,8 +39,10 @@ const assertNoSecrets = (view) => {
 test('public view only contains what displays, kiosks and mobiles need', () => {
   const view = publicView(fullState());
   assert.deepEqual(Object.keys(view).sort(), [
-    'branding', 'counterDisplays', 'counters', 'isClosed', 'publicMessage', 'services', 'soundSettings', 'tickets',
+    'branding', 'counterDisplays', 'counters', 'isClosed', 'publicMessage', 'services', 'settings', 'soundSettings', 'tickets',
   ]);
+  assert.deepEqual(Object.keys(view.settings).sort(), ['kiosk', 'publicUrl', 'schedule']);
+  assert.equal(view.branding.brandLogoUrl, '/api/branding/logo?v=abc');
   assert.equal('internalNote' in view.tickets[0], false);
   assertNoSecrets(view);
 });

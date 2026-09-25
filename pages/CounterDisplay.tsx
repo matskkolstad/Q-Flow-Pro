@@ -1,26 +1,25 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { useQueue } from '../context/QueueContext';
+import { useQueue, setSoundRole } from '../context/QueueContext';
+import { AudioUnlock } from '../components/AudioUnlock';
+import { counterServiceIds } from '../utils/queue';
 import { TicketStatus } from '../types';
 import { Logo } from '../components/Logo';
 import { Link, useLocation } from 'react-router-dom';
-import { Monitor, Wifi, Clock, ArrowRight, X } from 'lucide-react';
+import { Monitor, Wifi, WifiOff, Clock, ArrowRight, X } from 'lucide-react';
 import { useI18n } from '../context/I18nContext';
 
-const COUNTER_DISPLAY_HEARTBEAT_MS = 10_000;
+const COUNTER_DISPLAY_HEARTBEAT_MS = 15_000;
 
 const CounterDisplay: React.FC = () => {
-  const { counters, tickets, counterDisplays, isClosed, registerCounterDisplay, branding } = useQueue();
+  const { counters, services, tickets, counterDisplays, isClosed, registerCounterDisplay, branding, isConnected } = useQueue();
   const { t } = useI18n();
   const location = useLocation();
   const searchParams = useMemo(() => new URLSearchParams(location.search), [location.search]);
 
-  // Mark as display so sounds are allowed to play on this screen
+  // This screen announces calls (chime + voice)
   useEffect(() => {
-    localStorage.setItem('qflow_client_role', 'display');
-    return () => {
-      const role = localStorage.getItem('qflow_client_role');
-      if (role === 'display') localStorage.removeItem('qflow_client_role');
-    };
+    setSoundRole('display');
+    return () => setSoundRole(null);
   }, []);
 
   const paramCounterId = searchParams.get('counterId') || undefined;
@@ -37,10 +36,10 @@ const CounterDisplay: React.FC = () => {
   const displayShort = displayId.slice(-4).toUpperCase();
 
   const [displayName] = useState(() => {
-    if (typeof window === 'undefined') return `Skrankeskjerm ${displayShort}`;
+    if (typeof window === 'undefined') return `${t('counter.defaultName')} ${displayShort}`;
     const stored = localStorage.getItem('qflow_counter_display_name');
     if (stored) return stored;
-    const fallback = `Skrankeskjerm ${displayShort}`;
+    const fallback = `${t('counter.defaultName')} ${displayShort}`;
     localStorage.setItem('qflow_counter_display_name', fallback);
     return fallback;
   });
@@ -63,7 +62,8 @@ const CounterDisplay: React.FC = () => {
 
   const currentCounter = counters.find(c => c.id === assignedCounterId);
   const currentTicket = tickets.find(t => t.id === currentCounter?.currentTicketId);
-  const waitingCount = tickets.filter(t => t.status === TicketStatus.WAITING && (currentCounter?.activeServiceIds || []).includes(t.serviceId)).length;
+  // A counter without selected services handles all of them
+  const waitingCount = currentCounter ? tickets.filter(t => t.status === TicketStatus.WAITING && counterServiceIds(currentCounter, services).includes(t.serviceId)).length : 0;
   const counterOffline = currentCounter && !currentCounter.isOnline;
   const customMessage = myDisplay?.message?.trim();
   const showTicker = !!(customMessage && !isClosed && !counterOffline);
@@ -105,7 +105,7 @@ const CounterDisplay: React.FC = () => {
         onMouseMove={revealHeader}
       >
         <div className="flex items-center gap-3">
-          <Monitor className="text-indigo-400" />
+          <Monitor className="text-brand-400" />
           <div>
             <p className="text-xs uppercase font-bold text-gray-400">{t('counter.title')}</p>
             <p className="text-lg font-black text-white">{currentCounter?.name || t('counter.unassigned')}</p>
@@ -116,9 +116,15 @@ const CounterDisplay: React.FC = () => {
             <p className="text-[11px] uppercase font-bold text-gray-500">{t('counter.assigned')}</p>
             <p className="text-sm font-black text-white">{currentCounter?.name || t('counter.unassigned')}</p>
           </div>
-          <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full bg-green-900/60 text-green-300 text-xs font-bold">
-            <Wifi size={14} /> {t('counter.online')}
-          </span>
+          {isConnected ? (
+            <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full bg-green-900/60 text-green-300 text-xs font-bold">
+              <Wifi size={14} /> {t('counter.online')}
+            </span>
+          ) : (
+            <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full bg-red-900/60 text-red-300 text-xs font-bold">
+              <WifiOff size={14} /> {t('counter.offline')}
+            </span>
+          )}
         </div>
       </header>
 
@@ -138,7 +144,7 @@ const CounterDisplay: React.FC = () => {
                   {currentTicket.number}
                 </div>
                 <div className="text-xl text-gray-300 font-semibold flex items-center justify-center gap-2">
-                  <ArrowRight size={20} className="text-indigo-300" />
+                  <ArrowRight size={20} className="text-brand-300" />
                   {currentCounter?.name}
                 </div>
               </div>
@@ -174,6 +180,7 @@ const CounterDisplay: React.FC = () => {
           </div>
         )}
       </main>
+      <AudioUnlock />
     </div>
   );
 };
