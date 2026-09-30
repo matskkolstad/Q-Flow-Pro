@@ -1,463 +1,215 @@
-# Installation and Testing Guide
+# Installation Guide – Q-Flow Pro
 
-This guide provides step-by-step instructions for installing, configuring, and testing Q-Flow Pro.
+This guide covers installing, updating and running Q-Flow Pro on a Linux server – for example a Debian LXC on Proxmox.
 
-## Prerequisites
+1. [Requirements](#requirements)
+2. [Option A: install script (recommended)](#option-a-install-script-recommended)
+3. [Option B: manual installation](#option-b-manual-installation)
+4. [First sign-in and setup](#first-sign-in-and-setup)
+5. [Updating](#updating)
+6. [Upgrading from an older version](#upgrading-from-an-older-version)
+7. [Backups and restore](#backups-and-restore)
+8. [Reverse proxy / HTTPS](#reverse-proxy--https)
+9. [Docker](#docker)
+10. [Troubleshooting](#troubleshooting)
+11. [Testing checklist](#testing-checklist)
 
-### System Requirements
-- **Operating System**: Linux, macOS, or Windows (WSL recommended for Windows)
-- **Node.js**: Version 18.x or 20.x LTS (required)
-- **npm**: Version 9.x or later (bundled with Node.js)
-- **Build Tools**: 
-  - Linux: `build-essential`, `python3`
-  - macOS: Xcode Command Line Tools
-  - Windows: Visual Studio Build Tools or windows-build-tools
+## Requirements
 
-### Installing Prerequisites
+- Debian 12/13 or Ubuntu 22.04+ (container or VM). 1 CPU and 512 MB RAM are enough.
+- **Node.js 20.9 or newer (22 LTS recommended)**. Debian 12's own `nodejs` package (18.x) is too old; the install script installs Node 22 from NodeSource.
+- Network access from kiosks, displays and phones to the server port (default 3000).
+- Optional: network receipt printers (Epson ESC/POS on port 9100).
 
-#### Ubuntu/Debian Linux
+## Option A: install script (recommended)
+
+As root on the server:
+
 ```bash
-sudo apt update
-sudo apt install -y nodejs npm build-essential python3
+curl -fsSL https://raw.githubusercontent.com/matskkolstad/Q-Flow-Pro/main/scripts/install-lxc.sh | bash
 ```
 
-#### macOS
-```bash
-# Install Homebrew if not already installed
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+or from a checkout:
 
-# Install Node.js
-brew install node
+```bash
+git clone https://github.com/matskkolstad/Q-Flow-Pro.git /opt/Q-Flow-Pro
+bash /opt/Q-Flow-Pro/scripts/install-lxc.sh
 ```
 
-#### Windows (using WSL)
+The script:
+- installs git, build tools and Node.js 22 (if needed),
+- clones/updates the code in `/opt/Q-Flow-Pro` and builds it,
+- creates the system user `qflow` and the data directory `/var/lib/qflow`,
+- writes `/opt/Q-Flow-Pro/.env` with a random `SESSION_SECRET` and your time zone (an existing `.env` is kept),
+- installs and starts the systemd service `qflow`,
+- prints the address and the first admin password.
+
+Options (environment variables): `INSTALL_DIR`, `DATA_DIR`, `BRANCH`, `PORT`, `ADMIN_PASSWORD`, `REPO_URL`. Example:
+
 ```bash
-# Install Node.js via nvm
-curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh | bash
-source ~/.bashrc
-nvm install 20
-nvm use 20
+BRANCH=main PORT=8080 ADMIN_PASSWORD='My-Strong-Pass1' bash scripts/install-lxc.sh
 ```
 
-## Installation Steps
+## Option B: manual installation
 
-### 1. Clone the Repository
 ```bash
-git clone https://github.com/matskkolstad/Q-Flow-Pro.git
-cd Q-Flow-Pro
-```
+# 1. Node.js 22 (skip if `node -v` already shows v20.9+)
+apt update && apt install -y curl ca-certificates git build-essential python3
+curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+apt install -y nodejs
 
-### 2. Install Dependencies
-```bash
-npm install
-```
-
-**Note**: The `better-sqlite3` package requires native compilation. If you encounter build errors:
-- Ensure you have build tools installed (see Prerequisites)
-- Try: `npm install --build-from-source`
-- On Windows, you may need: `npm install --global windows-build-tools`
-
-### 3. Configure Environment
-```bash
-cp .env.example .env
-```
-
-Edit `.env` to customize settings:
-```env
-HOST=0.0.0.0
-PORT=3000
-NODE_ENV=production
-ALLOWED_ORIGINS=http://localhost:3000,http://localhost:5173
-
-# API Security (Optional but Recommended for Production)
-# Generate API keys with: node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
-API_KEYS=
-# IP Whitelist (Optional) - Supports CIDR notation
-# Example: ALLOWED_API_IPS=192.168.1.0/24,10.0.0.5
-ALLOWED_API_IPS=
-
-ENABLE_CSP=0
-SESSION_TTL_HOURS=12
-LOG_RETENTION_DAYS=14
-BACKUP_RETENTION_DAYS=30
-```
-
-**Security Notes**:
-- `API_KEYS`: Optional comma-separated API keys for additional endpoint protection
-- `ALLOWED_API_IPS`: Optional IP whitelist for API access (supports CIDR notation)
-- Leave security options empty for development; configure for production
-
-### 4. Build the Application
-```bash
+# 2. Code and build
+git clone https://github.com/matskkolstad/Q-Flow-Pro.git /opt/Q-Flow-Pro
+cd /opt/Q-Flow-Pro
+npm ci --include=dev
 npm run build
+
+# 3. Service user and data directory
+useradd --system --home /var/lib/qflow --shell /usr/sbin/nologin qflow
+mkdir -p /var/lib/qflow && chown -R qflow:qflow /var/lib/qflow
+
+# 4. Configuration
+cp .env.example .env
+nano .env          # at least: SESSION_SECRET, TZ, QFLOW_DATA_DIR=/var/lib/qflow
+chmod 600 .env
+
+# 5. systemd
+cp systemd/qflow.service /etc/systemd/system/qflow.service
+systemctl daemon-reload
+systemctl enable --now qflow
+systemctl status qflow
 ```
 
-This command:
-1. Compiles TypeScript to JavaScript
-2. Builds the React frontend with Vite
-3. Outputs production files to `dist/` directory
+Generate a secret with `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`.
 
-### 5. Start the Server
-```bash
-npm start
-```
+The server does **not** read `.env` by itself; systemd loads it (`EnvironmentFile`). To run it by hand for testing: `node --env-file=.env server.js`.
 
-The server will start on `http://localhost:3000`
+### Important `.env` settings
 
-## First-Time Setup
+| Setting | Recommendation |
+|---|---|
+| `TZ` | Your time zone, e.g. `Europe/Oslo` – opening hours, the nightly reset and statistics use it |
+| `QFLOW_DATA_DIR` | `/var/lib/qflow` (must be writable by the `qflow` user) |
+| `SESSION_SECRET` | A long random value |
+| `HOST` | `0.0.0.0` listens on all addresses. If you set a specific IP, the server does not answer on `localhost` |
+| `ALLOWED_ORIGINS` | Only needed if another site or the Vite dev server calls the API; pages served by Q-Flow always work |
+| `TRUST_PROXY` | Leave empty for no proxy or a proxy on your LAN; set the proxy address if it is on a public IP |
+| `QFLOW_ADMIN_PASSWORD` | Optional password for the first admin (fresh installs only) |
 
-### 1. Access the Application
-Open your browser and navigate to `http://localhost:3000`
+## First sign-in and setup
 
-### 2. Log in as the first admin
+1. Open `http://<server-ip>:3000` and sign in as `admin`.
+   - Password: `QFLOW_ADMIN_PASSWORD`, or the generated one: `journalctl -u qflow | grep -A2 "first admin"`.
+   - A generated password must be changed right away.
+2. **Settings → Design**: name, logo, main colour, ticket footer.
+3. **Settings → Services** and **Counters**: what customers can choose and which counter handles what.
+4. **Settings → Users**: create operator accounts.
+5. **Settings → Opening hours & jobs**: opening hours (optional), nightly reset, nightly backup.
+6. **Settings → Devices**:
+   - Add network printers (IP + port 9100) and use *Test print*.
+   - Set a **kiosk PIN**.
+   - On each kiosk device: open `/#/kiosk`, sign in as admin, press **Activate kiosk** (you are signed out; the device keeps its own access). Then assign a printer to it here.
+   - On each counter screen: open `/#/counter-display` and assign it to a counter here.
+7. Open `/#/display` on the TV and tap once to allow sound.
 
-There are no built-in default passwords. On the very first start (empty database) the server creates one admin account:
-- **Username**: `admin` (or `QFLOW_ADMIN_USERNAME`)
-- **Password**: the value of `QFLOW_ADMIN_PASSWORD` if set; otherwise a random password that is printed **once** in the server output:
+A Norwegian step-by-step guide for daily use: [docs/brukerveiledning.md](docs/brukerveiledning.md).
 
-```
-==================================================================
- Q-Flow Pro: first admin account created
-   username: admin
-   password: <random>
- You will be asked to change this password after the first login.
-==================================================================
-```
-
-Find it with `journalctl -u qflow` (systemd) or `docker compose logs qflow` (Docker).
-
-### 3. Change the password and create users
-
-If the password was generated, a password change is required after the first login (enforced by the server).
-Then create operator accounts under **Settings → Users**. Tick "Must change password at next login" to make them choose their own password.
-
-Upgrading from an older version? The first start after the upgrade signs everyone out once (old session tokens were exposed by earlier versions), and accounts that still use a default password (`Admin123!`, `Operator123!`, …) must change it at their next login.
-
-### 4. Configure Services and Counters
-1. Go to Settings → Services
-2. Add services (e.g., "Sales", "Support", "General")
-3. Set service prefix, color, and estimated time
-4. Go to Settings → Counters
-5. Create counters and assign services to them
-
-## Testing the System
-
-### Development Mode Testing
-
-For development with hot-reload:
-```bash
-npm run dev
-```
-
-This starts:
-- Frontend dev server on `http://localhost:5173`
-- Backend API on `http://localhost:3000` (proxied by Vite)
-
-### End-to-End Testing
-
-Run automated E2E tests with Playwright:
-```bash
-npm run test:e2e
-```
-
-**Prerequisites for E2E tests**:
-- The server must be running on a **fresh** data directory, e.g.
-  `QFLOW_DATA_DIR=/tmp/qflow-e2e QFLOW_ADMIN_PASSWORD='CiAdmin123!' TRUST_PROXY=false API_RATE_LIMIT_PER_MINUTE=1000 npm start`
-- Run the tests with the same admin password: `QFLOW_ADMIN_PASSWORD='CiAdmin123!' npm run test:e2e`
-
-### Manual Testing Checklist
-
-#### 1. Public Display
-- Navigate to `/public`
-- Verify the display shows "Waiting for the next number..."
-- Check that branding (logo/text) appears correctly
-
-#### 2. Kiosk Mode
-- Navigate to `/kiosk`
-- Select a service and draw a ticket
-- Verify ticket number appears on screen
-- Test language toggle (English/Norwegian)
-- Test exit kiosk mode with PIN (tap top-right corner 5 times)
-
-#### 3. Mobile Client
-- Navigate to `/mobile/new`
-- Draw a ticket for a service
-- Verify ticket status and estimated wait time
-
-#### 4. Counter Display
-- Navigate to `/counter-display?counterId=<counter-id>`
-- Verify counter name appears
-- When a ticket is called, verify it displays correctly
-
-#### 5. Admin Dashboard
-- Log in as admin
-- Test calling tickets from the queue
-- Test marking tickets as complete
-- Verify stats update in real-time
-
-#### 6. Admin Settings
-
-**General Settings:**
-- [ ] Upload/remove logo
-- [ ] Change brand text
-- [ ] Toggle sound settings
-- [ ] Open/close system
-- [ ] Set kiosk PIN
-- [ ] Create backup
-- [ ] Download backup
-
-**Services:**
-- [ ] Add service
-- [ ] Edit service (name, prefix, color, ETA)
-- [ ] Toggle service open/closed
-- [ ] Delete service
-
-**Counters:**
-- [ ] Add counter
-- [ ] Assign services to counter
-- [ ] Toggle counter online/offline
-- [ ] Delete counter
-
-**Users:**
-- [ ] Add new user (admin and operator)
-- [ ] Edit user role
-- [ ] Change user password
-- [ ] Delete user (verify last admin cannot be deleted)
-
-**Devices:**
-- [ ] Add printer
-- [ ] Assign printer to kiosk
-- [ ] Remove printer
-- [ ] Assign counter display to counter
-
-### Health Check
-
-Verify the health endpoint:
-```bash
-curl http://localhost:3000/health
-```
-
-Expected response:
-```json
-{
-  "status": "ok",
-  "timestamp": "2026-02-14T16:00:00.000Z"
-}
-```
-
-## Common Issues and Solutions
-
-### Issue: `better-sqlite3` Build Failure
-
-**Solution**:
-```bash
-# Install build tools
-sudo apt-get install -y build-essential python3
-
-# Rebuild the module
-npm rebuild better-sqlite3
-```
-
-### Issue: Port 3000 Already in Use
-
-**Solution**:
-```bash
-# Find process using port 3000
-lsof -i :3000
-
-# Kill the process
-kill -9 <PID>
-
-# Or change PORT in .env file
-echo "PORT=3001" >> .env
-```
-
-### Issue: Database Lock Error
-
-**Solution**:
-```bash
-# Stop all instances of the server
-pkill -f "node server.js"
-
-# Remove lock file if it exists
-rm -f data/qflow.db-wal
-rm -f data/qflow.db-shm
-
-# Restart server
-npm start
-```
-
-### Issue: CORS Errors in Browser
-
-**Solution**:
-Ensure `ALLOWED_ORIGINS` in `.env` includes your frontend URL:
-```env
-ALLOWED_ORIGINS=http://localhost:3000,http://localhost:5173,https://yourdomain.com
-```
-
-### Issue: WebSocket Connection Failures
-
-**Solution**:
-- Check firewall rules allow connections on port 3000
-- Verify ALLOWED_ORIGINS includes the client origin
-- For reverse proxy setups, ensure WebSocket upgrade headers are forwarded
-
-## Production Deployment
-
-### Security Checklist
-
-Before deploying to production, complete this security checklist:
-
-- [ ] Changed all default passwords (enforced automatically on first login)
-- [ ] Configured `API_KEYS` in `.env` (generate with crypto.randomBytes)
-- [ ] Configured `ALLOWED_API_IPS` to restrict API access (if applicable)
-- [ ] Set `ALLOWED_ORIGINS` to production domain(s) only
-- [ ] Reduced `SESSION_TTL_HOURS` if needed (consider 8 hours for high-security)
-- [ ] Deployed behind HTTPS reverse proxy
-- [ ] Configured firewall to block direct access to port 3000
-- [ ] Set up automated backups
-- [ ] Configured log monitoring and retention
-
-For detailed security guidance, see [SECURITY_BEST_PRACTICES.md](SECURITY_BEST_PRACTICES.md).
-
-### Option 1: systemd Service (Linux)
-
-See [docs/systemd.en.md](docs/systemd.en.md) for detailed instructions.
-
-Quick setup:
-```bash
-# Copy service file
-sudo cp systemd/qflow.service /etc/systemd/system/
-
-# Create environment file
-sudo cp .env /etc/qflow/qflow.env
-
-# Enable and start
-sudo systemctl enable qflow.service
-sudo systemctl start qflow.service
-```
-
-### Option 2: Docker
-
-See [docker-compose.yml](docker-compose.yml) for configuration.
+## Updating
 
 ```bash
-# Build image
-docker build -t qflow-pro .
-
-# Run container
-docker run -d -p 3000:3000 \
-  -v $(pwd)/data:/app/data \
-  -e NODE_ENV=production \
-  qflow-pro
-
-# Or use docker-compose
-docker-compose up -d
+bash /opt/Q-Flow-Pro/scripts/update.sh
 ```
 
-### Option 3: Reverse Proxy (Recommended)
+It pulls the latest code for the current branch (or `BRANCH=...`), installs dependencies, builds while the old version keeps running, copies the database to `backups/qflow-pre-update-*.db`, updates the systemd unit if needed and restarts the service.
 
-Example Nginx configuration:
+Manual equivalent:
+
+```bash
+cd /opt/Q-Flow-Pro
+git pull
+npm ci --include=dev && npm run build
+systemctl restart qflow
+```
+
+## Upgrading from an older version
+
+The first start of a new version migrates the data automatically:
+
+- **Everyone is signed out once** (old session tokens were exposed by versions before the security update).
+- Accounts that still use a default password (`Admin123!`, `Operator123!`, their username, `Changeme1`) must change it.
+- **Kiosks must be activated once** by an admin on each device (`/#/kiosk` → *Activate kiosk*). The kiosk PIN is kept.
+- Finished tickets already in the database are copied into the statistics, and numbering continues where it was.
+- Data that was stored next to the code (`/opt/Q-Flow-Pro/data`) is moved to `/var/lib/qflow` by the install script. If you install by hand, copy it yourself:
+  `cp -a /opt/Q-Flow-Pro/data/. /var/lib/qflow/ && chown -R qflow:qflow /var/lib/qflow`
+
+Take a copy of the data directory before upgrading: `cp -a /var/lib/qflow /root/qflow-backup-$(date +%F)`.
+
+## Backups and restore
+
+- Automatic: every night at the time set under *Settings → Opening hours & jobs* (default 02:30). The newest `BACKUP_KEEP` (14) are kept, and none older than `BACKUP_RETENTION_DAYS` (30).
+- Manual: *Settings → Backups → Create backup*.
+- Download a backup there to keep a copy elsewhere (recommended).
+- **Restore**: *Settings → Backups → Restore*. The current data is saved first (`qflow-pre-restore-*.db`); signed-in users stay signed in.
+- **Move to another server**: download a backup, install Q-Flow on the new server, *Upload backup*, then *Restore*.
+- From the shell (service stopped): `cp /var/lib/qflow/backups/<file>.db /var/lib/qflow/qflow.db && chown qflow:qflow /var/lib/qflow/qflow.db`.
+
+## Reverse proxy / HTTPS
+
+Put Q-Flow behind a reverse proxy (Nginx Proxy Manager, Caddy, nginx, Traefik) when it is reachable from the internet. WebSockets must be allowed.
+
+nginx example:
+
 ```nginx
 server {
-    listen 80;
-    server_name queue.example.com;
-
-    location / {
-        proxy_pass http://localhost:3000;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
+  server_name queue.example.com;
+  location / {
+    proxy_pass http://127.0.0.1:3000;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+  }
 }
 ```
 
-## Backup and Restore
+Then set in `.env`:
+- `TRUST_PROXY=` empty if the proxy runs on the same host or on a private network; otherwise the proxy's address.
+- In the admin panel, *Settings → Design → Public address*: `https://queue.example.com` (used for QR codes).
+- For Google/OIDC: `GOOGLE_CALLBACK_URL` / `OIDC_CALLBACK_URL` with the public address.
 
-### Create Backup via GUI
-1. Log in as admin
-2. Go to Settings → General
-3. Click "Create backup"
-4. Download the backup file
+## Docker
 
-### Create Backup via API
 ```bash
-curl -X POST http://localhost:3000/api/admin/backup \
-  -H "Authorization: Bearer <your-token>"
+docker compose up -d
+docker compose logs qflow    # first admin password on a fresh install
 ```
 
-### Restore Backup
-```bash
-# Stop the server
-sudo systemctl stop qflow.service
+Data is stored in `./data` on the host. Settings are passed as environment variables in `docker-compose.yml` or an `.env` file next to it.
 
-# Replace database
-cp backup-file.db data/qflow.db
+## Troubleshooting
 
-# Start the server
-sudo systemctl start qflow.service
-```
+| Problem | Solution |
+|---|---|
+| `systemctl status qflow` shows *failed* | `journalctl -u qflow -n 50 --no-pager` shows the error |
+| `EADDRINUSE` | Something else uses the port (an old `npm start`?) |
+| `EACCES` / permission denied | `chown -R qflow:qflow /var/lib/qflow` |
+| Errors about `sharp` or `better-sqlite3` | Node is too old, or rerun `npm ci --include=dev` |
+| `curl http://localhost:3000` fails but the browser works | `HOST` is set to a specific IP; use that IP or `HOST=0.0.0.0` |
+| Opening hours / nightly reset at the wrong time | Set `TZ=Europe/Oslo` (or your zone) in `.env` and restart |
+| No sound on the display | Tap the screen once (browser rule); check *Settings → General → Sound* |
+| Kiosk shows “not a kiosk” | Activate it: sign in as admin on the device and open `/#/kiosk` |
+| Everyone locked out | Stop the service and use the [user CLI](docs/cli.en.md): `sudo -u qflow QFLOW_DATA_DIR=/var/lib/qflow node scripts/user-cli.js update --username admin --password 'New-Pass1'` |
 
-## User Management via CLI
+## Testing checklist
 
-See [docs/cli.en.md](docs/cli.en.md) for detailed CLI usage.
+After installing or updating:
 
-Quick commands:
-```bash
-# List all users
-npm run user-cli -- list
-
-# Create new admin
-npm run user-cli -- create \
-  --username newadmin \
-  --name "New Administrator" \
-  --role ADMIN \
-  --password SecurePass123!
-
-# Update user password
-npm run user-cli -- update \
-  --id u1 \
-  --password NewPassword123!
-```
-
-## Getting Help
-
-- **Documentation**: Check README.md and docs/ directory
-- **Issues**: Report bugs on GitHub Issues
-- **Security**: See SECURITY_AUDIT.md for known vulnerabilities
-
-## License and Disclaimer
-
-**Copyright (c) 2026 Mats Kolstad. All rights reserved.**
-
-This software is provided under a **Proprietary License**. See [LICENSE](LICENSE) file for complete terms.
-
-### License Summary
-
-- ✅ **Allowed**: View source, use for personal/internal purposes, modify for own use
-- ❌ **Prohibited**: Distribution, selling, sublicensing without written permission
-- 📧 **Contact**: matskkolstad via GitHub for licensing inquiries
-
-### AI Development Disclaimer
-
-⚠️ **IMPORTANT**: This entire application has been developed using Artificial Intelligence (AI).
-
-**The owner makes NO WARRANTIES and accepts NO LIABILITY for:**
-- Software defects, bugs, or errors
-- Security vulnerabilities or breaches
-- Data loss or corruption
-- Compliance with laws or regulations
-- Any damages arising from use
-
-**By using this software, you agree to:**
-- Accept full responsibility for testing and validation
-- Implement appropriate security measures
-- Conduct your own security audits
-- Ensure compliance with applicable requirements
-- Assume all risks associated with use
-
-**USE AT YOUR OWN RISK.**
+1. `curl http://<host>:<port>/health` returns `{"status":"ok",...}`.
+2. Sign in as admin; the forced password change appears for a generated password.
+3. Draw a ticket on `/#/mobile/new`; it appears in the operator panel and on `/#/display`.
+4. *Call next* in the operator panel: the display highlights the number and plays the chime/voice (after a tap).
+5. *Complete*, *Did not show up*, *Back to queue* and *Transfer* work; the statistics page counts the finished tickets.
+6. Activate a kiosk, draw a ticket, check printing (or the on-screen number + QR code), exit with the PIN.
+7. *Settings → Backups*: create a backup and download it.

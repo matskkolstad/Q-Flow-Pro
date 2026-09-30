@@ -1,6 +1,6 @@
 <div align="center">
   <h1>Q-Flow Pro</h1>
-  <p>Queue and counter management with real-time updates, public displays, kiosk, counter screens, and admin panel.</p>
+  <p>Self-hosted queue and counter management: ticket kiosk, mobile tickets, public and counter displays, operator panel and statistics – updated in real time.</p>
 </div>
 
 ## 🌐 Demo
@@ -13,7 +13,7 @@ A live demo of the application is available here: **https://qflow-demo.matskk.co
 
 The owner of this software makes **NO WARRANTIES** and assumes **NO LIABILITY** for:
 - ❌ Software defects, bugs, or errors
-- ❌ Security vulnerabilities or breaches  
+- ❌ Security vulnerabilities or breaches
 - ❌ Data loss, corruption, or integrity issues
 - ❌ Compliance with laws, regulations, or standards
 - ❌ Fitness for any particular purpose
@@ -30,239 +30,160 @@ The owner of this software makes **NO WARRANTIES** and assumes **NO LIABILITY** 
 ---
 
 ## Documentation
-- **[Installation Guide](INSTALLATION.md)** - Complete setup instructions and testing guide
-- **[OAuth/OIDC Authentication](docs/oauth-oidc-auth.md)** - Configure Google Workspace and OIDC authentication
-- **[Review Summary](REVIEW_SUMMARY.md)** - Comprehensive review results ([Norwegian version](GJENNOMGANG.md))
-- **[Security Audit](SECURITY_AUDIT.md)** - Known vulnerabilities and security considerations
-- **[CLI Documentation](docs/cli.en.md)** - Command-line user management ([Norwegian version](docs/cli.md))
-- **[systemd Setup](docs/systemd.en.md)** - Linux service configuration ([Norwegian version](docs/systemd.md))
+- **[Installation guide](INSTALLATION.md)** – install on Debian/Proxmox LXC (script or manual), update, back up, reverse proxy
+- **[Brukerveiledning (norsk)](docs/brukerveiledning.md)** – daily use: kiosk, screens, operator panel, settings
+- **[Security](SECURITY.md)** – security model and how to report issues · [Best practices](docs/security-best-practices.md)
+- **[OAuth/OIDC sign-in](docs/oauth-oidc-auth.md)** – Google Workspace, Entra ID, Keycloak …
+- **[User CLI](docs/cli.en.md)** ([norsk](docs/cli.md)) – manage users from the command line
+- **[systemd](docs/systemd.en.md)** ([norsk](docs/systemd.md)) – service details
+- **[Changelog](CHANGELOG.md)**
 
-## Table of Contents
-- [Demo](#-demo)
+## Contents
 - [Features](#features)
-- [Architecture](#architecture)
 - [Screenshots](#screenshots)
-- [Requirements](#requirements)
-- [Quick Start (local)](#quick-start-local)
-- [Environment Variables](#environment-variables)
-- [Production Build](#production-build)
-- [Run as systemd Service](#run-as-systemd-service)
-- [Docker / Compose](#docker--compose)
-- [Testing](#testing)
-- [Admin Capabilities](#admin-capabilities)
-- [Branding](#branding)
-- [Data & Persistence](#data--persistence)
-- [Operational Tips](#operational-tips)
-- [User Management (GUI & CLI)](#user-management-gui--cli)
-- [Using the System (flow)](#using-the-system-flow)
+- [Architecture](#architecture)
+- [Quick install (Debian / Proxmox LXC)](#quick-install-debian--proxmox-lxc)
+- [Configuration](#configuration)
+- [Screens and URLs](#screens-and-urls)
+- [Data, backups and statistics](#data-backups-and-statistics)
+- [Security](#security)
+- [Development and tests](#development-and-tests)
+- [License](#license)
 
 ## Features
-- Pull tickets from kiosk, mobile client, or operator.
-- Real-time updates via Socket.IO (queue state, calls, messages).
-- Public display (“now serving”) and counter display for targeted calls.
-- Public display QR code is generated locally in the browser (no external QR service dependency).
-- Admin panel for services, counters, users, printers, announcements, sound, and closing.
-- Security: session TTL, password policy, helmet headers, sanitized settings, optional CSP.
-- SQLite persistence with backups, log rotation, and `/health` endpoint.
 
-## Architecture
-- Frontend: React + Vite (TypeScript). Built assets served from `dist` by the Node server.
-- Backend: Node.js + Express + Socket.IO. Persistence: SQLite (`data/qflow.db`).
-- Server owns state/logging; clients receive `init-state` + `state-update` events.
+**For customers**
+- **Kiosk** (touch screen): pick a service, get a number. Prints on a network receipt printer (Epson ESC/POS, port 9100) or shows the number on screen, with a QR code to follow the queue on a phone. Returns to the start screen by itself.
+- **Mobile ticket** (`/#/mobile/new`, QR code on the public display): draw a ticket on the phone, see your place and estimated wait, get a vibration/sound/notification when it is your turn, cancel the ticket. Survives reloads.
+- **Public display**: now serving, next in line (in the real call order), recently called, clock, scrolling message, chime + voice announcement (Norwegian/English) – works without internet.
+- **Counter display**: a screen at each counter showing the number being served there.
+
+**For staff**
+- **Operator panel**: “call next” (the server picks the ticket, so two counters can never call the same one), call a specific ticket, call again, complete, did not show up, back to queue, transfer to another service, cancel.
+- **Statistics**: tickets, waiting and service times per service, counter, hour and day; CSV export.
+- **Opening hours**: open/close the queue automatically, reset numbering every night, daily backups.
+- **Design**: your own logo, name, main colour (the whole interface follows it), ticket footer and announcement text.
+- **Devices**: network printers (with test print), kiosks (activated per device, exit with PIN), counter displays with their own messages.
+- **Users**: admins and operators, optional Google Workspace / OIDC sign-in, forced password change, user CLI.
+- **Backups**: create, download, upload and restore from the admin panel.
+- Norwegian and English interface.
 
 ## Screenshots
-- Admin dashboard: ![Admin Dashboard](docs/images/overview.png)
-- Public display: ![Public Display](docs/images/big-screen.png)
-- Counter display: ![Counter Display](docs/images/counter-screen.png)
-- Kiosk: ![Kiosk](docs/images/kiosk-draw.png)
-- Mobile client: ![Mobile Client](docs/images/mobile.png)
 
-## Requirements
-- Node.js 18+ (LTS recommended)
-- npm (bundled with Node)
-- SQLite (embedded, no extra install)
-- For server deploy: systemd (optional) and open port 3000 (default)
+| Operator panel | Public display |
+|---|---|
+| ![Operator panel](docs/images/overview.png) | ![Public display](docs/images/big-screen.png) |
+| **Statistics** | **Design settings** |
+| ![Statistics](docs/images/stats.png) | ![Design settings](docs/images/settings-design.png) |
+| **Kiosk** | **Mobile ticket** |
+| ![Kiosk](docs/images/kiosk-draw.png) | ![Mobile ticket](docs/images/mobile.png) |
 
-## Quick Start (local)
+## Architecture
+- **Frontend**: React + Vite + Tailwind (TypeScript), served as static files by the Node server.
+- **Backend**: Node.js (22 LTS recommended) + Express + Socket.IO.
+  - `server.js` – HTTP API, authentication, background jobs, wiring
+  - `lib/socketHandlers.js` – real-time events (tickets, admin changes, devices)
+  - `lib/queueService.js` / `lib/queue.js` – queue rules (order, numbering, estimates, opening hours)
+  - `lib/stateViews.js` – what each role may see (public / operator / admin)
+  - `lib/history.js` – ticket history and statistics
+- **Storage**: SQLite (`qflow.db`): the live state as one JSON document plus a `ticket_history` table for statistics.
+- Every change is decided by the server and pushed to all screens; each browser only receives the data its role needs.
+
+## Quick install (Debian / Proxmox LXC)
+
+On a fresh Debian 12/13 or Ubuntu LXC/VM, as root:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/matskkolstad/Q-Flow-Pro/main/scripts/install-lxc.sh | bash
+```
+
+The script installs Node.js 22, clones the code to `/opt/Q-Flow-Pro`, builds it, creates the `qflow` service user,
+stores data in `/var/lib/qflow`, writes `/opt/Q-Flow-Pro/.env` and starts the `qflow` systemd service.
+It prints the address and the first admin password at the end.
+
+Update later with:
+
+```sh
+bash /opt/Q-Flow-Pro/scripts/update.sh
+```
+
+Manual installation, Docker, reverse proxy and upgrading from older versions: see **[INSTALLATION.md](INSTALLATION.md)**.
+
+## Configuration
+
+Settings are read from environment variables (`.env` when running under systemd). All options with comments: [.env.example](.env.example).
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `HOST` / `PORT` | `0.0.0.0` / `3000` | Where the server listens |
+| `TZ` | system | Time zone for opening hours, nightly jobs and statistics (e.g. `Europe/Oslo`) |
+| `QFLOW_DATA_DIR` | `./data` | Database, logs and backups |
+| `SESSION_SECRET` | generated | Required for Google/OIDC sign-in across restarts |
+| `QFLOW_ADMIN_USERNAME` / `QFLOW_ADMIN_PASSWORD` | `admin` / generated | First admin on a fresh install only |
+| `TRUST_PROXY` | private networks | Which reverse proxies may set `X-Forwarded-For` |
+| `ALLOWED_ORIGINS` | localhost | Extra origins allowed to call the API/WebSocket cross-origin (pages served by Q-Flow always work) |
+| `SESSION_TTL_HOURS` | `12` | How long a sign-in lasts |
+| `BACKUP_KEEP` / `BACKUP_RETENTION_DAYS` | `14` / `30` | How many backups to keep, and for how long |
+| `LOG_RETENTION_DAYS` | `14` | Log file retention |
+| `MAX_WAITING_TICKETS` | `500` | Refuse new tickets beyond this (spam protection) |
+| `API_KEYS` | – | Keys for integrations calling `/api/print-ticket` |
+| `ALLOWED_API_IPS` | – | Optional IP allowlist for the admin/print API |
+| `GOOGLE_*` / `OIDC_*` | – | OAuth callback URLs (credentials are set in the admin panel) |
+
+Everything else (services, counters, users, design, opening hours, devices, sign-in methods) is configured in the admin panel.
+
+**First sign-in:** a fresh install creates the user `admin`. The password is `QFLOW_ADMIN_PASSWORD`, or a random one printed once in the log (`journalctl -u qflow | grep -A2 "first admin"`) that must be changed at first login. There are no default passwords.
+
+## Screens and URLs
+
+| URL | Screen | Who |
+|---|---|---|
+| `/` | Start page | everyone |
+| `/#/login` | Sign in | staff |
+| `/#/admin` | Operator panel, statistics, logs, settings | operators and admins |
+| `/#/display` | Public display (TV) | public |
+| `/#/counter-display?counterId=<id>` | Counter display | public |
+| `/#/kiosk` | Ticket kiosk – must be activated once by an admin on the device | kiosk devices |
+| `/#/mobile/new` | Draw a ticket on a phone | public |
+| `/#/ticket/<id>?k=<key>` | Follow one ticket (link/QR from the kiosk or phone) | the ticket holder |
+
+Displays play a chime and read the number aloud. Browsers only allow sound after someone has tapped the page once; the display shows a button for that.
+
+## Data, backups and statistics
+- The database is `$QFLOW_DATA_DIR/qflow.db`; logs are in `logs/` and backups in `backups/` next to it.
+- A backup is taken automatically every night (time configurable) and can also be created, downloaded, uploaded and **restored** under *Settings → Backups*. A restore first saves the current data.
+- The queue is reset automatically every night (numbering starts at 001 again); finished tickets stay in the statistics.
+- Statistics are under *Statistics* in the admin panel and can be exported as CSV.
+- The admin log keeps the latest 500 events; everything is also written to `logs/app-YYYY-MM-DD.log` and the journal.
+
+## Security
+- Each browser only receives what its role needs (public screens never get users, sessions, secrets or logs).
+- Passwords are bcrypt-hashed; session tokens are random 256-bit values stored only as hashes; forced password changes are enforced by the server.
+- Kiosks run with their own device token – no admin session stays on a public device.
+- Rate limits for sign-in, tickets and anonymous socket events; `X-Forwarded-For` is only trusted from configured proxies.
+- Put the server behind HTTPS (reverse proxy) when it is reachable from outside your LAN.
+
+Details and how to report a vulnerability: **[SECURITY.md](SECURITY.md)**.
+
+## Development and tests
+
 ```sh
 npm install
-cp .env.example .env   # adjust if needed
-npm run dev             # Vite dev on 5173, API proxied to 3000
+npm run dev            # Vite on http://localhost:5173 (API proxied to :3000)
+npm start              # in another terminal: the server on :3000 (after npm run build for production)
+npm run lint           # ESLint
+npm run typecheck      # TypeScript
+npm run test:unit      # unit tests (node:test)
 ```
-- Frontend dev: http://localhost:5173
-- Backend: http://localhost:3000
-- **First admin on a fresh install**: username `admin`. The password is taken from `QFLOW_ADMIN_PASSWORD`, or, if that is empty, generated and printed **once** in the server log (terminal, `journalctl -u qflow` or `docker compose logs`). A generated password must be changed at first login. There are no built-in default passwords.
 
-## Environment Variables
-See [.env.example](.env.example). Key settings:
-- `HOST` / `PORT`: binding (default 0.0.0.0:3000)
-- `ALLOWED_ORIGINS`: comma-separated origins for CORS/WebSocket (add your domain for prod)
-- `QFLOW_ADMIN_USERNAME` / `QFLOW_ADMIN_PASSWORD`: first admin account on a fresh install
-- `QFLOW_DATA_DIR`: where the database, logs and backups are stored (default `./data`)
-- `TRUST_PROXY`: which reverse proxies may set `X-Forwarded-For` (default: proxies on localhost/private networks). **Set this if your reverse proxy runs on a public address**, otherwise all clients share one rate-limit bucket.
-- `API_KEYS`: comma-separated API keys for integrations that call `/api/print-ticket` (optional)
-- `ALLOWED_API_IPS`: comma-separated IP addresses or CIDR blocks allowed to access API (optional)
-- `ENABLE_CSP`: set `1` when frontend is CSP-clean
-- `SESSION_TTL_HOURS`: session lifetime
-- `LOG_RETENTION_DAYS`, `BACKUP_RETENTION_DAYS`: rotation periods
+End-to-end tests (Playwright) run against a server with a fresh database:
 
-## Production Build
 ```sh
-npm install
-npm run build    # tsc + Vite build → dist/
-npm start        # node server.js (serves dist/ and API)
-```
-Health: `GET /health`.
-
-## Run as systemd Service
-1) Copy unit: `sudo cp systemd/qflow.service /etc/systemd/system/qflow.service`
-2) Environment: `/etc/qflow/qflow.env` (see .env.example) with permissions 640, owner `qflow`
-3) User/ownership: `sudo useradd --system --home /opt/qflow --shell /usr/sbin/nologin qflow` and `sudo chown -R qflow:qflow /opt/qflow /etc/qflow`
-4) Reload and start: `sudo systemctl daemon-reload && sudo systemctl enable --now qflow.service`
-5) Status/logs: `systemctl status qflow.service` and `journalctl -u qflow.service -f`
-
-Unit runs as user `qflow`, loads `/etc/qflow/qflow.env`, restarts on failure.
-
-## Docker / Compose
-Build image:
-```sh
-docker build -t qflow-pro .
-```
-Compose (see `docker-compose.yml`):
-```sh
-docker compose up -d
-docker compose logs qflow   # shows the generated first admin password on a fresh install
-```
-Exposes port 3000. Data (database, logs, backups) is stored in `./data` on the host (mounted at `/app/data`).
-Set env vars via compose or an `.env` file next to `docker-compose.yml`.
-
-> **Upgrading from an older compose file** (which mounted `./db.json`): the database used to live only inside
-> the container. Copy it out **before** rebuilding: `docker cp qflow-pro:/app/data ./data`.
-
-## Testing
-- Unit tests: `npm run test:unit`
-- E2E (Playwright, needs a running server): `QFLOW_ADMIN_PASSWORD=... npm run test:e2e` (see `.github/workflows/ci.yml` for the full setup)
-- Health check: `curl http://localhost:3000/health`
-
-## Admin Capabilities
-- Login at `/` with admin account.
-- Manage services, counters, users, printers, announcements, sounds, closing/opening.
-- Backups: POST `/api/admin/backup`, list `/api/admin/backups`, download `/api/admin/backup/:file`.
-
-## Branding
-- Admin → General: set `brandText` and `brandLogoUrl` (base64/url). Empty `brandText` hides the text.
-- Logo component allows custom logo + text; fallback is “Q-Flow Pro” only when text is unset.
-- Text color is controlled per usage via `textClass` (dark UIs use white text).
-- Branding/logo is propagated to main views and closed overlays (home, login, kiosk, public display, counter display, mobile, admin).
-
-## Data & Persistence
-- SQLite DB at `data/qflow.db`; backups at `data/backups/`; logs at `data/logs/` (all git-ignored).
-- Server loads state from DB on boot and persists changes (settings, tickets, users, etc.).
-- Sessions are stored with a TTL (`SESSION_TTL_HOURS`); only SHA-256 hashes of session tokens are kept.
-- Each browser only receives the data its role needs: public screens (display, kiosk, mobile) never receive users, sessions, secrets or logs.
-
-## Operational Tips
-- Set `ALLOWED_ORIGINS` to real domains before production.
-- Place behind HTTPS reverse proxy (Nginx/Caddy) with TLS and optionally HSTS.
-- Enable CSP (ENABLE_CSP=1) when assets are CSP-ready.
-- Backup/log rotation is built-in; monitor disk and keep offsite copies if needed.
-
-## Security Considerations
-
-### Authentication & Access Control
-- **Forced Password Change**: Generated/default passwords must be changed at first login; this is enforced by the server
-- **Kiosk devices**: An admin activates a kiosk from the kiosk page. The kiosk gets its own device token and the admin is signed out, so no admin session stays on a public device. Leaving kiosk mode requires the kiosk PIN (checked by the server) and deactivates the device.
-- **Password Policy**: Minimum 8 characters with uppercase, lowercase, and digits required
-- **OAuth/OIDC Support**: Enterprise authentication with Google Workspace and OIDC providers (see [OAuth/OIDC docs](docs/oauth-oidc-auth.md))
-  - Domain whitelisting for Google Workspace
-  - Auto-provisioning with configurable default roles
-  - Account linking by email (only when the provider has verified the address)
-- **Session Management**: Configurable TTL (default 12 hours) with automatic expiration
-- **API Key Protection**: Optional API keys for integrations that print tickets (configure via `API_KEYS` env var)
-- **IP Whitelisting**: Optional IP-based access control for API endpoints (configure via `ALLOWED_API_IPS` env var)
-  - Supports individual IPs: `192.168.1.100,10.0.0.5`
-  - Supports CIDR notation: `192.168.1.0/24,10.0.0.0/8`
-
-### Network Security
-- **Reverse Proxy**: Always deploy behind a reverse proxy (Nginx, Caddy, Apache) with:
-  - HTTPS/TLS termination
-  - Rate limiting on `/api/login` and `/api/*` endpoints
-  - Optional CSRF protection
-- **CORS**: Properly configured via `ALLOWED_ORIGINS` environment variable
-- **Network Isolation**: Restrict access to trusted networks or use VPN for admin access
-
-### API Security
-To enable API key protection:
-1. Generate secure random keys: `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`
-2. Add to `.env`: `API_KEYS=your_generated_key_here`
-3. Send the key in the `X-API-Key` header
-
-`/api/print-ticket` accepts either an admin session or a valid API key, and only prints on printers configured in the admin panel (`{ "printerId": "...", "ticketNumber": "A001" }`).
-Admin backup endpoints always require an admin session.
-
-### Best Practices
-- **Updates**: Regularly update dependencies to patch security vulnerabilities
-- **Backups**: Keep secure, offsite backups of the database and configuration
-- **Monitoring**: Review logs regularly for suspicious activity
-- **Least Privilege**: Use operator accounts for day-to-day operations; reserve admin for configuration
-
-## User Management (GUI & CLI)
-
-### GUI (recommended)
-1) Login as admin → Settings → Users.
-2) Create user: set name, username, role (ADMIN/OPERATOR), password (policy: ≥8 chars, upper+lower+digit).
-3) Save; server enforces at least one admin. Passwords are hashed server-side.
-4) Edit user: update name/role/password, save. Delete user only if at least one admin remains.
-
-### First admin (if DB is empty)
-On first boot an admin account is created (see [Quick Start](#quick-start-local)). Create operator accounts under Settings → Users.
-
-### CLI (headless/server-side)
-Script: `npm run user-cli` (alias for `node scripts/user-cli.js`). Supports interactive shell or one-shot commands.
-
-Interactive mode:
-```sh
-npm run user-cli
-qflow> list
-qflow> create --username admin2 --name "Admin Two" --role ADMIN --password StrongPass1
-qflow> exit
+QFLOW_DATA_DIR=/tmp/qflow-e2e QFLOW_ADMIN_PASSWORD='CiAdmin123!' TRUST_PROXY=false API_RATE_LIMIT_PER_MINUTE=1000 npm start
+QFLOW_ADMIN_PASSWORD='CiAdmin123!' npm run test:e2e
 ```
 
-One-shot examples:
-```sh
-# create
-npm run user-cli -- create --username kiosk --name "Kiosk" --role OPERATOR --password KioskPass1
-# list
-npm run user-cli -- list
-# update role
-npm run user-cli -- update --id <userId> --role OPERATOR
-# change password
-npm run user-cli -- update --id <userId> --password NewPass1
-# delete
-npm run user-cli -- delete --id <userId>
-```
-Guards: cannot delete or demote last admin (`at_least_one_admin_required`).
-
-## Using the System (flow)
-1) **Login** (admin/operator) at `/`.
-2) **Configure** (admin):
-  - Services: name, prefix, color, ETA, priority, open/closed.
-  - Counters: assign active service IDs; set online/offline.
-  - Users: add operators/admins.
-  - Printers: register network printers; assign to kiosks.
-  - Branding/message/sound: set brand text/logo, public message, sound toggles.
-3) **Public display**: open `/public` (or link in UI). Shows now-serving and up-next; uses dark theme with your branding.
-4) **Counter display**: open `/counter-display?counterId=<id>` on a screen at the counter. Admin can assign displays to counters in Devices.
-5) **Kiosk**: open `/kiosk` on a kiosk device; users draw tickets per service (prints if printer assigned; otherwise on-screen).
-6) **Mobile client**: `/mobile/new` lets users draw a ticket and track status.
-7) **Calling flow** (operator/admin):
-  - In Dashboard, pick a counter, click a waiting ticket → “Serving”.
-  - System broadcasts to displays; public display highlights now-serving; counter display shows target.
-  - When done, mark “Completed”; counter is freed.
-8) **Close/Open system**: toggle in Admin → General; kiosks blocked while closed.
-9) **Backups**: Admin → Backup (or API); downloads SQLite snapshot.
-
-Tip: Role separation — operators can serve tickets but not manage users/settings; admins can do all operations.
+CI (`.github/workflows/ci.yml`) runs lint, type check, build, dependency audit, unit and e2e tests and a Docker build on every push and pull request; CodeQL scans the code weekly.
 
 ## License
 

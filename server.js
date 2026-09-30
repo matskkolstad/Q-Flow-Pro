@@ -10,7 +10,20 @@ import net from 'net';
 import crypto from 'crypto';
 import fs from 'fs';
 import helmet from 'helmet';
-import { loadState as loadStateFromStore, saveState as saveStateToStore, backupDatabase, listBackups, getDataDir } from './lib/stateStore.js';
+import rateLimit from 'express-rate-limit';
+import {
+  loadState as loadStateFromStore,
+  saveState as saveStateToStore,
+  backupDatabase,
+  listBackups,
+  getDataDir,
+  getBackupDir,
+  backupPath,
+  readBackup,
+  replaceHistory,
+  saveUploadedBackup,
+  closeDb,
+} from './lib/stateStore.js';
 import { initializePassport, isGoogleConfigured, isOIDCConfigured, AUTH_ERRORS } from './lib/passportConfig.js';
 import {
   parseTrustProxy,
@@ -18,13 +31,16 @@ import {
   hashToken,
   generateToken,
   safeEqual,
-  isValidPrinterHost,
-  isValidPort,
   createRateLimiter,
 } from './lib/security.js';
 import { hashPassword, verifyPassword, passwordPolicy, migrateUsers, generatePassword } from './lib/users.js';
 import { viewForRole } from './lib/stateViews.js';
 import { printTicket } from './lib/printer.js';
+import { cleanText, randomId, parseLogoDataUrl, DEFAULT_SETTINGS, sanitizeSettings } from './lib/validators.js';
+import { createQueueService } from './lib/queueService.js';
+import { isOpenAt, isDailyJobDue, localDay, estimateWaitMinutes } from './lib/queue.js';
+import { buildStats, historyCsv, isValidDay } from './lib/history.js';
+import { registerSocketHandlers } from './lib/socketHandlers.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -55,7 +71,12 @@ const TRUST_PROXY = parseTrustProxy(process.env.TRUST_PROXY);
 const app = express();
 app.set('trust proxy', TRUST_PROXY);
 const trustProxyFn = app.get('trust proxy fn');
-app.use(express.json({ limit: '1mb' }));
+const jsonBody = express.json({ limit: '1mb' });
+app.use((req, res, next) => {
+  // The logo upload has its own, larger limit.
+  if (req.path === '/api/admin/branding/logo') return next();
+  return jsonBody(req, res, next);
+});
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
   cors: {
@@ -72,7 +93,7 @@ app.use(helmet({
       defaultSrc: ["'self'"],
       scriptSrc: ["'self'"],
       connectSrc: ["'self'", ...ALLOWED_ORIGINS, ...ALLOWED_WS_ORIGINS],
-      imgSrc: ["'self'", 'data:'],
+      imgSrc: ["'self'", 'data:', 'https:', 'http:'],
       styleSrc: ["'self'", "'unsafe-inline'"],
       fontSrc: ["'self'", 'data:'],
       objectSrc: ["'none'"],
@@ -123,14 +144,12 @@ io.engine.on('connection_error', (err) => {
   addLog(`Socket handshake feilet: ${err?.code || err?.message || 'ukjent'} (${err?.context || ''})`, 'ALERT');
 });
 
-const saveState = () => saveStateToStore(state);
-
 // Initial State defaults
 const DEFAULT_STATE = {
   services: [
-    { id: 's1', name: 'Kundeservice', prefix: 'K', color: 'bg-blue-600', estimatedTimePerPersonMinutes: 5, isOpen: true, priority: 1 },
-    { id: 's2', name: 'Teknisk Support', prefix: 'T', color: 'bg-purple-600', estimatedTimePerPersonMinutes: 15, isOpen: true, priority: 1 },
-    { id: 's3', name: 'Levering & Retur', prefix: 'L', color: 'bg-emerald-600', estimatedTimePerPersonMinutes: 3, isOpen: true, priority: 1 },
+    { id: 's1', name: 'Kundeservice', prefix: 'K', color: '#2563eb', estimatedTimePerPersonMinutes: 5, isOpen: true, priority: 1 },
+    { id: 's2', name: 'Teknisk Support', prefix: 'T', color: '#9333ea', estimatedTimePerPersonMinutes: 15, isOpen: true, priority: 1 },
+    { id: 's3', name: 'Levering & Retur', prefix: 'L', color: '#059669', estimatedTimePerPersonMinutes: 3, isOpen: true, priority: 1 },
   ],
   counters: [
     { id: 'c1', name: 'Skranke 1', activeServiceIds: ['s1', 's3'], isOnline: true },
@@ -141,6 +160,7 @@ const DEFAULT_STATE = {
   // The first admin is created on first boot (see bootstrapAdmin below).
   users: [],
   tickets: [],
+  ticketCounters: {},
   printers: [],
   kiosks: [],
   kioskPrinterAssignments: {},
@@ -155,8 +175,12 @@ const DEFAULT_STATE = {
   },
   branding: {
     brandText: 'Q-Flow Pro',
-    brandLogoUrl: ''
+    brandLogoUrl: '',
+    primaryColor: '',
+    ticketFooter: '',
   },
+  settings: DEFAULT_SETTINGS,
+  jobs: {},
   kioskExitPinHash: '',
   logs: [],
   publicMessage: "",
@@ -185,27 +209,17 @@ const SESSION_TTL_MS = Number(process.env.SESSION_TTL_HOURS || 12) * 60 * 60 * 1
 const LOG_LIMIT = 500;
 const DATA_DIR = getDataDir();
 const LOG_DIR = join(DATA_DIR, 'logs');
+const PID_FILE = join(DATA_DIR, 'server.pid');
 const LOG_RETENTION_DAYS = Number(process.env.LOG_RETENTION_DAYS || 14);
-const BACKUP_DIR = join(DATA_DIR, 'backups');
+const BACKUP_DIR = getBackupDir();
 const BACKUP_RETENTION_DAYS = Number(process.env.BACKUP_RETENTION_DAYS || 30);
 const SLOW_REQUEST_MS = 1200;
-const WAITING_ALERT_THRESHOLD = 50;
-const WAITING_ALERT_INTERVAL_MS = 5 * 60 * 1000;
 const MAX_WAITING_TICKETS = Number(process.env.MAX_WAITING_TICKETS || 500);
-const MAX_KIOSKS = 100;
-const MAX_COUNTER_DISPLAYS = 200;
 const OAUTH_CODE_TTL_MS = 60 * 1000;
 // Bumped when a release needs a one-time migration of security-relevant data.
 const SECURITY_VERSION = 1;
-let lastQueueAlertAt = 0;
-
-const cleanText = (val = '', max = 80) => {
-  if (typeof val !== 'string') return '';
-  return val.replace(/\s+/g, ' ').trim().slice(0, max);
-};
-
-const isSafeId = (val) => typeof val === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(val);
-const randomId = () => crypto.randomBytes(6).toString('hex');
+// Bumped when the shape of the stored data changes.
+const DATA_VERSION = 2;
 
 // --- Rate limiting ---
 
@@ -232,20 +246,14 @@ const checkApiRateLimit = (ip) => {
   const now = Date.now();
   let entry = apiRateLimits.get(ip) || { timestamps: [], blocked: false, blockExpiry: 0 };
 
-  // Check if currently blocked
   if (entry.blocked && entry.blockExpiry > now) {
     return { allowed: false, remaining: 0, blockExpiry: entry.blockExpiry };
   }
-
-  // Unblock if block period expired
   if (entry.blocked && entry.blockExpiry <= now) {
     entry = { timestamps: [], blocked: false, blockExpiry: 0 };
   }
 
-  // Clean old timestamps
   const recent = entry.timestamps.filter((t) => now - t < API_RATE_WINDOW_MS);
-
-  // Check if limit exceeded
   if (recent.length >= MAX_API_REQUESTS) {
     entry.blocked = true;
     entry.blockExpiry = now + API_BLOCK_DURATION_MS;
@@ -254,11 +262,9 @@ const checkApiRateLimit = (ip) => {
     return { allowed: false, remaining: 0, blockExpiry: entry.blockExpiry };
   }
 
-  // Add current request
   recent.push(now);
   entry.timestamps = recent;
   apiRateLimits.set(ip, entry);
-
   return { allowed: true, remaining: MAX_API_REQUESTS - recent.length };
 };
 
@@ -276,18 +282,13 @@ const getSocketIp = (socket) => {
 
 const isIPv4 = (ip) => /^\d{1,3}(?:\.\d{1,3}){3}$/.test(ip);
 
-// Middleware: General API rate limiting
 const apiRateLimiter = (req, res, next) => {
-  // Skip rate limiting for health endpoint
   if (req.path === '/health') return next();
-
-  // Apply rate limiting to API endpoints only
   if (!req.path.startsWith('/api/')) return next();
 
   const ip = getClientIp(req);
   const check = checkApiRateLimit(ip);
 
-  // Set rate limit headers
   res.setHeader('X-RateLimit-Limit', MAX_API_REQUESTS.toString());
   res.setHeader('X-RateLimit-Remaining', check.remaining.toString());
   res.setHeader('X-RateLimit-Reset', new Date(Date.now() + API_RATE_WINDOW_MS).toISOString());
@@ -302,7 +303,6 @@ const apiRateLimiter = (req, res, next) => {
       retryAfter: resetTime
     });
   }
-
   next();
 };
 
@@ -317,24 +317,19 @@ const ipToInt = (ip) => {
 
 // IP whitelist validation (supports CIDR notation)
 const isIPAllowed = (ip) => {
-  if (ALLOWED_API_IPS.length === 0) return true; // No whitelist = allow all
-
+  if (ALLOWED_API_IPS.length === 0) return true;
   const normalizedIp = normalizeClientIp(ip);
   if (!normalizedIp) return false;
   for (const allowed of ALLOWED_API_IPS) {
     const normalizedAllowed = normalizeClientIp(allowed);
     if (normalizedAllowed === normalizedIp) return true;
-
-    // Basic CIDR support (e.g., 192.168.1.0/24)
     if (allowed.includes('/') && isIPv4(normalizedIp)) {
       const [network, bitsRaw] = allowed.split('/');
       const normalizedNetwork = normalizeClientIp(network);
       const bits = Number(bitsRaw);
       if (!Number.isInteger(bits) || bits < 0 || bits > 32 || !isIPv4(normalizedNetwork)) continue;
       const mask = bits === 0 ? 0 : (-1 << (32 - bits));
-      const networkInt = ipToInt(normalizedNetwork);
-      const ipInt = ipToInt(normalizedIp);
-      if ((ipInt & mask) === (networkInt & mask)) return true;
+      if ((ipToInt(normalizedIp) & mask) === (ipToInt(normalizedNetwork) & mask)) return true;
     }
   }
   return false;
@@ -347,7 +342,18 @@ const hasValidApiKey = (req) => {
   return API_KEYS.some((k) => safeEqual(k, apiKey));
 };
 
-// Middleware: Validate IP whitelist
+// Extra limit for the admin routes that read or write backup files (on top of the global API limit).
+const backupFileLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 30,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  keyGenerator: (req) => getClientIp(req),
+  // getClientIp already applies TRUST_PROXY; the library's own proxy checks do not apply.
+  validate: false,
+  message: { error: 'too_many_requests' },
+});
+
 const requireAllowedIP = (req, res, next) => {
   const ip = getClientIp(req);
   if (!isIPAllowed(ip)) {
@@ -362,73 +368,117 @@ const requireAllowedIP = (req, res, next) => {
 const ROOMS = { PUBLIC: 'view:public', OPERATOR: 'view:operator', ADMIN: 'view:admin' };
 let state = null;
 
-const addLog = (message, type = 'INFO') => {
-  const log = {
-    id: crypto.randomBytes(5).toString('hex'),
-    timestamp: Date.now(),
-    message,
-    type
-  };
-  if (state) state.logs = [log, ...(state.logs || [])].slice(0, LOG_LIMIT);
+const writeLogLine = (entry) => {
   try {
-    console.log(JSON.stringify({ level: type, msg: message, ts: log.timestamp }));
+    // Debug lines only go to the log file, keeping the journal readable.
+    if (entry.level !== 'DEBUG') console.log(JSON.stringify(entry));
     fs.mkdirSync(LOG_DIR, { recursive: true });
-    const day = new Date(log.timestamp).toISOString().slice(0, 10);
-    fs.appendFileSync(join(LOG_DIR, `app-${day}.log`), JSON.stringify({ level: type, msg: message, ts: log.timestamp }) + '\n');
+    const day = new Date(entry.ts).toISOString().slice(0, 10);
+    fs.appendFileSync(join(LOG_DIR, `app-${day}.log`), JSON.stringify(entry) + '\n');
+  } catch {
+    // logging must never break the server
+  }
+};
+
+// Events shown in the admin log (and written to the log files).
+const addLog = (message, type = 'INFO') => {
+  const log = { id: crypto.randomBytes(5).toString('hex'), timestamp: Date.now(), message, type };
+  if (state) state.logs = [log, ...(state.logs || [])].slice(0, LOG_LIMIT);
+  writeLogLine({ level: type, msg: message, ts: log.timestamp });
+  try {
     io.to([ROOMS.OPERATOR, ROOMS.ADMIN]).emit('log-event', log);
-  } catch (e) {
-    // fallback noop
+  } catch {
+    // io not ready yet
   }
   return log;
 };
 
+// Technical noise (connections, heartbeats) only goes to the log files / journal.
+const debugLog = (message) => writeLogLine({ level: 'DEBUG', msg: message, ts: Date.now() });
+
+// --- Persistence ---
+// Changes are written in batches: many events in quick succession cause one write.
+let saveTimer = null;
+const saveNow = () => {
+  if (saveTimer) {
+    clearTimeout(saveTimer);
+    saveTimer = null;
+  }
+  saveStateToStore(state);
+};
+const saveState = () => {
+  if (saveTimer) return;
+  saveTimer = setTimeout(() => {
+    saveTimer = null;
+    try {
+      saveStateToStore(state);
+    } catch (err) {
+      console.error('Saving state failed', err);
+    }
+  }, 200);
+};
+
 // --- Load and migrate state ---
 
-state = loadStateFromStore(DEFAULT_STATE);
-state = { ...DEFAULT_STATE, ...state };
-
-if (!state.kioskPrinterAssignments) state.kioskPrinterAssignments = {};
-if (!state.counterDisplays) state.counterDisplays = [];
-if (!state.kiosks) state.kiosks = [];
-if (!state.printers) state.printers = [];
-if (!state.tickets) state.tickets = [];
-if (!state.logs) state.logs = [];
-if (state.isClosed === undefined) state.isClosed = false;
-if (!state.branding) state.branding = { brandText: 'Q-Flow Pro', brandLogoUrl: '' };
-if (!state.sessions || typeof state.sessions !== 'object') state.sessions = {};
-if (!state.devices || typeof state.devices !== 'object') state.devices = {};
-if (!state.authProviders) state.authProviders = DEFAULT_STATE.authProviders;
-if (state.authProviders.oidc && state.authProviders.oidc.requireVerifiedEmail === undefined) {
-  state.authProviders.oidc.requireVerifiedEmail = true;
-}
-
-if ((state.securityVersion || 0) < SECURITY_VERSION) {
-  // Earlier versions broadcast the whole state (including session tokens and password hashes)
-  // to every connected client, and shipped a db.json with long-lived admin sessions.
-  // Treat every existing session as compromised and clean up credentials derived from it.
-  const { users } = migrateUsers(state.users, { checkPasswords: true });
-  state.users = users;
-  const hadSessions = Object.keys(state.sessions).length;
-  state.sessions = {};
-  state.devices = {};
-  if (typeof state.kioskExitPin === 'string' && state.kioskExitPin) {
-    state.kioskExitPinHash = hashPassword(state.kioskExitPin);
+// Brings a raw stored state (current or from an older version / backup) up to date.
+const prepareState = (raw) => {
+  const next = { ...DEFAULT_STATE, ...raw };
+  ['kioskPrinterAssignments', 'devices', 'sessions', 'jobs', 'ticketCounters'].forEach((key) => {
+    if (!next[key] || typeof next[key] !== 'object' || Array.isArray(next[key])) next[key] = {};
+  });
+  ['counterDisplays', 'kiosks', 'printers', 'tickets', 'logs', 'users', 'services', 'counters'].forEach((key) => {
+    if (!Array.isArray(next[key])) next[key] = [];
+  });
+  if (next.isClosed === undefined) next.isClosed = false;
+  // The first start of this version must not wipe today's queue with the daily reset.
+  if (!next.jobs.lastResetDay) next.jobs.lastResetDay = localDay();
+  next.branding = { ...DEFAULT_STATE.branding, ...(next.branding || {}) };
+  next.soundSettings = { ...DEFAULT_STATE.soundSettings, ...(next.soundSettings || {}) };
+  // Merge stored settings over the defaults (validated the same way as admin changes).
+  const merged = sanitizeSettings(next.settings || {}, DEFAULT_SETTINGS);
+  next.settings = merged.value || DEFAULT_SETTINGS;
+  if (!next.authProviders) next.authProviders = DEFAULT_STATE.authProviders;
+  if (next.authProviders.oidc && next.authProviders.oidc.requireVerifiedEmail === undefined) {
+    next.authProviders.oidc.requireVerifiedEmail = true;
   }
-  state.securityVersion = SECURITY_VERSION;
-  addLog(`Sikkerhetsmigrering ${SECURITY_VERSION} fullført: ${hadSessions} gamle innlogginger ugyldiggjort`, 'ALERT');
-} else {
-  state.users = migrateUsers(state.users, { checkPasswords: false }).users;
-}
-delete state.kioskExitPin;
-if (typeof state.kioskExitPinHash !== 'string') state.kioskExitPinHash = '';
 
-// Drop sessions that are expired or have no expiry (legacy sessions never expired).
-Object.entries(state.sessions).forEach(([key, sess]) => {
-  if (!sess?.expiresAt || sess.expiresAt < Date.now()) delete state.sessions[key];
-});
+  if ((next.securityVersion || 0) < SECURITY_VERSION) {
+    // Earlier versions broadcast the whole state (including session tokens and password hashes)
+    // to every connected client, and shipped a db.json with long-lived admin sessions.
+    // Treat every existing session as compromised and clean up credentials derived from it.
+    next.users = migrateUsers(next.users, { checkPasswords: true }).users;
+    const hadSessions = Object.keys(next.sessions).length;
+    next.sessions = {};
+    next.devices = {};
+    if (typeof next.kioskExitPin === 'string' && next.kioskExitPin) {
+      next.kioskExitPinHash = hashPassword(next.kioskExitPin);
+    }
+    next.securityVersion = SECURITY_VERSION;
+    addLog(`Sikkerhetsmigrering ${SECURITY_VERSION} fullført: ${hadSessions} gamle innlogginger ugyldiggjort`, 'ALERT');
+  } else {
+    next.users = migrateUsers(next.users, { checkPasswords: false }).users;
+  }
+  delete next.kioskExitPin;
+  if (typeof next.kioskExitPinHash !== 'string') next.kioskExitPinHash = '';
+
+  // Drop sessions that are expired or have no expiry (legacy sessions never expired).
+  Object.entries(next.sessions).forEach(([key, sess]) => {
+    if (!sess?.expiresAt || sess.expiresAt < Date.now()) delete next.sessions[key];
+  });
+
+  // Ensure kiosk printer assignments survive restarts by seeding map from kiosks
+  next.kiosks.forEach(k => {
+    if (k.assignedPrinterId && !next.kioskPrinterAssignments[k.id]) {
+      next.kioskPrinterAssignments[k.id] = k.assignedPrinterId;
+    }
+  });
+  return next;
+};
+
+state = prepareState(loadStateFromStore(DEFAULT_STATE));
 
 // Create the first admin on a fresh install. The password comes from QFLOW_ADMIN_PASSWORD,
-// or is generated and printed once to the console (docker logs / journalctl).
+// or is generated and printed once to the console (journalctl).
 const bootstrapAdmin = () => {
   if ((state.users || []).some((u) => u.role === 'ADMIN')) return;
   const envPassword = process.env.QFLOW_ADMIN_PASSWORD;
@@ -453,7 +503,7 @@ const bootstrapAdmin = () => {
     passwordHash: hashPassword(password),
     mustChangePassword: generated,
   });
-  addLog(`Opprettet første administrator "${username}"`, 'ALERT');
+  addLog('Opprettet første administrator', 'ALERT');
   if (generated) {
     console.log('\n==================================================================');
     console.log(' Q-Flow Pro: first admin account created');
@@ -464,15 +514,6 @@ const bootstrapAdmin = () => {
   }
 };
 bootstrapAdmin();
-
-// Ensure kiosk printer assignments survive restarts by seeding map from kiosks
-state.kiosks.forEach(k => {
-  if (k.assignedPrinterId && !state.kioskPrinterAssignments[k.id]) {
-    state.kioskPrinterAssignments[k.id] = k.assignedPrinterId;
-  }
-});
-
-saveState();
 
 // --- Sessions & devices (only SHA-256 hashes of tokens are stored) ---
 
@@ -536,8 +577,8 @@ const issueLoginCode = (userId) => {
   return code;
 };
 
-// Initialize Passport strategies after createSession and addLog are defined
-initializePassport(state, createSession, addLog);
+const reinitPassport = () => initializePassport(state, createSession, addLog);
+reinitPassport();
 
 // --- State broadcasting (role-filtered) ---
 
@@ -622,6 +663,14 @@ const requireRole = (socket, roles = []) => {
   return false;
 };
 
+const actorLabel = (socket) => {
+  const role = socket?.data?.authRole || 'PUBLIC';
+  const uid = socket?.data?.userId;
+  const user = uid ? (state.users || []).find((u) => u.id === uid) : null;
+  const name = user?.name || user?.username || (socket?.data?.kioskId ? `Kiosk ${socket.data.kioskId}` : 'Ukjent');
+  return `${name} [${role}${uid ? `:${uid}` : ''}]`;
+};
+
 // --- HTTP authentication helpers ---
 
 const bearerToken = (req) => {
@@ -650,36 +699,123 @@ const publicUser = (user) => ({
   mustChangePassword: !!user.mustChangePassword,
 });
 
-// Remove kiosker that have been offline for a while to keep the list tidy
-const KIOSK_STALE_MS = 180_000; // 3 minute inactivity window
-const DISPLAY_STALE_MS = 180_000;
-const PRINTER_CHECK_MS = 30_000; // health-check interval
-const PRINTER_TIMEOUT_MS = 2000;
-setInterval(() => {
-  const cutoff = Date.now() - KIOSK_STALE_MS;
-  const stale = state.kiosks.filter(k => k.lastSeen < cutoff);
-  if (stale.length === 0) return;
-  const before = state.kiosks.length;
-  const oldest = Math.min(...stale.map(k => k.lastSeen || 0));
-  const ageMs = Date.now() - oldest;
-  state.kiosks = state.kiosks.filter(k => k.lastSeen >= cutoff);
-  addLog(`Fjernet ${stale.length} inaktive kiosker etter inaktivitet (før:${before} nå:${state.kiosks.length}, cutoff ${KIOSK_STALE_MS}ms, eldste ${ageMs}ms)`, 'INFO');
-  saveState();
-  broadcastStaffState();
-}, 15_000);
+// --- Queue service ---
 
-setInterval(() => {
-  const cutoff = Date.now() - DISPLAY_STALE_MS;
-  const stale = state.counterDisplays.filter(d => d.lastSeen < cutoff);
-  if (stale.length === 0) return;
-  const before = state.counterDisplays.length;
-  const oldest = Math.min(...stale.map(d => d.lastSeen || 0));
-  const ageMs = Date.now() - oldest;
-  state.counterDisplays = state.counterDisplays.filter(d => d.lastSeen >= cutoff);
-  addLog(`Fjernet ${stale.length} inaktive skrankeskjermer etter inaktivitet (før:${before} nå:${state.counterDisplays.length}, cutoff ${DISPLAY_STALE_MS}ms, eldste ${ageMs}ms)`, 'INFO');
-  saveState();
-  broadcastState();
-}, 15_000);
+const ctx = {
+  get state() { return state; },
+  io,
+  addLog,
+  debugLog,
+  save: saveState,
+  saveNow,
+  broadcastState,
+  broadcastStaffState,
+  requireRole,
+  refreshSocket,
+  refreshAllSockets,
+  actorLabel,
+  deleteUserSessions,
+  revokeKioskDevices,
+  getDevice,
+  reinitPassport,
+  maxWaitingTickets: MAX_WAITING_TICKETS,
+  limits: { publicTicketsBySocket, publicTicketsByIp, kioskPinAttempts, counterDisplayRegistrations },
+};
+const queue = createQueueService(ctx);
+ctx.queue = queue;
+
+if ((state.dataVersion || 0) < DATA_VERSION) {
+  queue.migrateLegacyTickets();
+  state.dataVersion = DATA_VERSION;
+}
+queue.syncCounters();
+queue.refreshTodaySummary();
+saveNow();
+
+// Prints a ticket on the printer assigned to a kiosk (errors are logged, never thrown).
+const kioskPrinter = (kioskId) => {
+  const assignedPrinterId = state.kiosks.find(k => k.id === kioskId)?.assignedPrinterId || state.kioskPrinterAssignments?.[kioskId];
+  return assignedPrinterId ? state.printers.find(p => p.id === assignedPrinterId) || null : null;
+};
+ctx.kioskHasPrinter = (kioskId) => !!kioskPrinter(kioskId);
+ctx.printForKiosk = async (kioskId, ticket, service, { language, qrUrl } = {}) => {
+  const printer = kioskPrinter(kioskId);
+  if (!printer) {
+    addLog(`Ingen skriver tilordnet kiosk ${kioskId} ved utskrift av ${ticket.number}`, 'INFO');
+    return false;
+  }
+  const peopleAhead = state.tickets.filter((t) => t.serviceId === service.id && t.status === 'WAITING' && t.id !== ticket.id).length;
+  const result = await printTicket({
+    printer,
+    ticket,
+    serviceName: service.name,
+    waitTime: estimateWaitMinutes(state, service.id, peopleAhead),
+    language,
+    brandText: state.branding?.brandText,
+    brandLogoUrl: state.branding?.brandLogoData || state.branding?.brandLogoUrl,
+    qrUrl: state.settings?.kiosk?.printQr ? qrUrl : undefined,
+    footer: state.branding?.ticketFooter,
+    log: addLog,
+  }).catch((err) => ({ ok: false, error: err?.message || String(err) }));
+  if (!result.ok) {
+    addLog(`Kiosk-utskrift feilet for ${ticket.number} via ${printer.ipAddress}:${printer.port || 9100} (${result.error})`, 'ALERT');
+  }
+  return result.ok;
+};
+
+// --- Background jobs ---
+
+const PRINTER_CHECK_MS = 30_000;
+const PRINTER_TIMEOUT_MS = 2000;
+const DISPLAY_FORGET_MS = 7 * 24 * 60 * 60 * 1000;
+
+const runBackup = async (label, actor) => {
+  saveNow();
+  const file = await backupDatabase(label);
+  addLog(`Backup opprettet: ${file}${actor ? ` av ${actor}` : ''}`, 'ACTION');
+  return file;
+};
+
+// Every 30 s: opening hours, daily reset, scheduled backup and cleanup of old finished tickets.
+const runScheduler = async () => {
+  const now = new Date();
+  const settings = state.settings || DEFAULT_SETTINGS;
+  state.jobs = state.jobs || {};
+
+  const open = isOpenAt(settings.schedule, now);
+  if (open !== null && open !== state.jobs.lastScheduleOpen) {
+    // Only act on transitions, so a manual open/close stays until the next scheduled change.
+    state.jobs.lastScheduleOpen = open;
+    if (state.isClosed === open) {
+      state.isClosed = !open;
+      addLog(`Åpningstider: køen er nå ${open ? 'åpnet' : 'stengt'}`, 'ACTION');
+      saveState();
+      broadcastState();
+    }
+  }
+
+  if (settings.autoReset?.enabled && isDailyJobDue(settings.autoReset.time, state.jobs.lastResetDay, now)) {
+    queue.reset('automatisk daglig nullstilling');
+  }
+
+  if (settings.backup?.enabled && isDailyJobDue(settings.backup.time, state.jobs.lastBackupDay, now)) {
+    state.jobs.lastBackupDay = localDay(now);
+    saveState();
+    runBackup('auto').catch((err) => addLog(`Automatisk backup feilet: ${err?.message || err}`, 'ALERT'));
+  }
+
+  queue.archiveFinished();
+
+  const forgetBefore = Date.now() - DISPLAY_FORGET_MS;
+  const displays = state.counterDisplays.length;
+  state.counterDisplays = state.counterDisplays.filter((d) => (d.lastSeen || 0) >= forgetBefore);
+  if (state.counterDisplays.length !== displays) {
+    saveState();
+    broadcastState();
+  }
+};
+setInterval(() => { runScheduler().catch((err) => console.error('Scheduler failed', err)); }, 30_000);
+setTimeout(() => { runScheduler().catch((err) => console.error('Scheduler failed', err)); }, 2_000);
 
 // Housekeeping: expired sessions, OAuth codes and rate-limit buckets.
 setInterval(() => {
@@ -722,17 +858,19 @@ const checkPrinter = (ip, port) => new Promise((resolve) => {
   sock.connect(port, ip, () => finish(true));
 });
 
-setInterval(async () => {
-  const started = Date.now();
+const checkPrinters = async ({ logAll = false } = {}) => {
   if (!state.printers || state.printers.length === 0) return;
   let changed = false;
-  for (let i = 0; i < state.printers.length; i++) {
-    const p = state.printers[i];
+  for (const p of [...state.printers]) {
     const ok = await checkPrinter(p.ipAddress, p.port || 9100);
     const nextStatus = ok ? 'ONLINE' : 'OFFLINE';
-    if (p.status !== nextStatus) {
-      state.printers[i] = { ...p, status: nextStatus };
-      addLog(`Skriver ${p.name || p.id} ${p.ipAddress}:${p.port || 9100} status ${p.status || 'UKJENT'} -> ${nextStatus}`, nextStatus === 'ONLINE' ? 'INFO' : 'ALERT');
+    const current = state.printers.find((x) => x.id === p.id);
+    if (!current) continue;
+    if (current.status !== nextStatus || logAll) {
+      addLog(`Skriver ${p.name || p.id} ${p.ipAddress}:${p.port || 9100}: ${nextStatus}`, nextStatus === 'ONLINE' ? 'INFO' : 'ALERT');
+    }
+    if (current.status !== nextStatus) {
+      current.status = nextStatus;
       changed = true;
     }
   }
@@ -740,47 +878,56 @@ setInterval(async () => {
     saveState();
     broadcastStaffState();
   }
-  const duration = Date.now() - started;
-  if (duration > 2000) {
-    addLog(`Printer health-sjekk tok ${duration}ms for ${state.printers.length} skrivere`, 'INFO');
-  }
-}, PRINTER_CHECK_MS);
-// Kick off an initial health-check at startup
-(async () => {
-  if (state.printers && state.printers.length > 0) {
-    for (let i = 0; i < state.printers.length; i++) {
-      const p = state.printers[i];
-      const ok = await checkPrinter(p.ipAddress, p.port || 9100);
-      state.printers[i] = { ...p, status: ok ? 'ONLINE' : 'OFFLINE' };
-      addLog(`Skriver ${p.name || p.id} initial status: ${state.printers[i].status}`, ok ? 'INFO' : 'ALERT');
-    }
-    saveState();
-    broadcastStaffState();
-  }
-})();
+};
+ctx.checkPrinters = checkPrinters;
+setInterval(() => { checkPrinters().catch(() => {}); }, PRINTER_CHECK_MS);
+checkPrinters({ logAll: true }).catch(() => {});
 
-// HTTP request logging (path only: query strings may carry codes and must not end up in logs)
+const pruneOldFiles = (dir, extension, retentionDays, label) => {
+  try {
+    if (!fs.existsSync(dir)) return;
+    const cutoff = Date.now() - retentionDays * 24 * 60 * 60 * 1000;
+    let removed = 0;
+    fs.readdirSync(dir).filter(f => f.endsWith(extension)).forEach((f) => {
+      const full = join(dir, f);
+      if (fs.statSync(full).mtimeMs < cutoff) {
+        fs.unlinkSync(full);
+        removed += 1;
+      }
+    });
+    if (removed > 0) addLog(`Slettet ${removed} gamle ${label}`, 'INFO');
+  } catch (e) {
+    console.warn(`Failed to prune ${label}`, e);
+  }
+};
+const pruneOldLogs = () => pruneOldFiles(LOG_DIR, '.log', LOG_RETENTION_DAYS, 'loggfiler');
+const pruneOldBackups = () => pruneOldFiles(BACKUP_DIR, '.db', BACKUP_RETENTION_DAYS, 'backups');
+pruneOldLogs();
+pruneOldBackups();
+setInterval(pruneOldLogs, 12 * 60 * 60 * 1000);
+setInterval(pruneOldBackups, 12 * 60 * 60 * 1000);
+
+// --- HTTP ---
+
+// Request logging: API and auth calls plus errors; paths only (query strings may carry codes).
 app.use((req, res, next) => {
   const path = (req.originalUrl || req.url || '').split('?')[0];
-  if (path === '/health' || path.startsWith('/assets/')) return next();
+  if (path === '/health') return next();
   const start = Date.now();
   res.on('finish', () => {
-    const duration = Date.now() - start;
     const status = res.statusCode;
+    const relevant = path.startsWith('/api/') || path.startsWith('/auth/') || status >= 400;
+    if (!relevant) return;
+    const duration = Date.now() - start;
     const slowTag = duration > SLOW_REQUEST_MS ? ' SLOW' : '';
-    const level = status >= 500 ? 'ALERT' : status >= 400 ? 'ACTION' : (duration > SLOW_REQUEST_MS ? 'ACTION' : 'INFO');
-    addLog(`${req.method} ${path} -> ${status} (${duration}ms)${slowTag}`, level);
+    const message = `${req.method} ${path} -> ${status} (${duration}ms)${slowTag}`;
+    if (status >= 400 || duration > SLOW_REQUEST_MS) addLog(message, status >= 500 ? 'ALERT' : 'ACTION');
+    else debugLog(message);
   });
   next();
 });
 
-// Apply API rate limiting before routes
 app.use(apiRateLimiter);
-
-const ticketWaitTime = (service) => {
-  const serviceWaitingCount = state.tickets.filter(t => t.serviceId === service.id && t.status === 'WAITING').length;
-  return serviceWaitingCount * (service.estimatedTimePerPersonMinutes || 1);
-};
 
 // --- REST: test print on a configured printer (admin session or API key) ---
 app.post('/api/print-ticket', requireAllowedIP, (req, res) => {
@@ -802,10 +949,11 @@ app.post('/api/print-ticket', requireAllowedIP, (req, res) => {
     printer,
     ticket: { number: cleanText(ticketNumber, 12) || 'TEST' },
     serviceName: service?.name,
-    waitTime: service ? ticketWaitTime(service) : undefined,
+    waitTime: service ? estimateWaitMinutes(state, service.id) : undefined,
     language,
     brandText: state.branding?.brandText,
-    brandLogoUrl: state.branding?.brandLogoUrl,
+    brandLogoUrl: state.branding?.brandLogoData || state.branding?.brandLogoUrl,
+    footer: state.branding?.ticketFooter,
     log: addLog,
   }).then((result) => {
     res.status(result.ok ? 200 : 502).json(result);
@@ -895,7 +1043,6 @@ app.post('/api/user/password', requireAuth(null, { allowPasswordChange: true }),
 
 // --- OAuth / OIDC Authentication Routes ---
 
-// Get available auth providers (for login page)
 app.get('/api/auth/providers', (req, res) => {
   return res.json({
     local: true,
@@ -926,7 +1073,6 @@ const oauthCallback = (provider, label) => (req, res, next) => {
       addLog(`${label} avvist fra ${ip}: ${code}`, 'ALERT');
       return fail(code);
     }
-    // Persist linked/provisioned users
     saveState();
     const code = issueLoginCode(user.id);
     addLog(`${label} innlogging vellykket for ${user.username} (${user.role}) fra ${ip}`, 'ACTION');
@@ -967,143 +1113,172 @@ app.post('/api/auth/exchange', (req, res) => {
   return res.json({ token, user: publicUser(user) });
 });
 
-const actorLabel = (socket) => {
-  const role = socket?.data?.authRole || 'PUBLIC';
-  const uid = socket?.data?.userId;
-  const user = uid ? (state.users || []).find((u) => u.id === uid) : null;
-  const name = user?.name || user?.username || (socket?.data?.kioskId ? `Kiosk ${socket.data.kioskId}` : 'Ukjent');
-  return `${name} [${role}${uid ? `:${uid}` : ''}]`;
+// --- Branding: uploaded logo ---
+
+app.get('/api/branding/logo', (req, res) => {
+  const data = state.branding?.brandLogoData;
+  const parsed = data ? parseLogoDataUrl(data) : null;
+  if (!parsed || parsed.error) return res.status(404).end();
+  res.setHeader('Content-Type', parsed.mime);
+  // The URL carries a version, so browsers may cache it.
+  res.setHeader('Cache-Control', req.query.v ? 'public, max-age=31536000, immutable' : 'no-cache');
+  // An SVG opened directly must not be able to run scripts on this origin.
+  res.setHeader('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; img-src data:");
+  return res.send(parsed.buffer);
+});
+
+app.post('/api/admin/branding/logo', requireAuth(['ADMIN']), express.json({ limit: '3mb' }), (req, res) => {
+  const parsed = parseLogoDataUrl(req.body?.dataUrl);
+  if (parsed.error) return res.status(400).json({ error: parsed.error });
+  state.branding = {
+    ...state.branding,
+    brandLogoData: req.body.dataUrl,
+    brandLogoUrl: '',
+    logoVersion: crypto.createHash('sha256').update(parsed.buffer).digest('hex').slice(0, 12),
+  };
+  saveState();
+  broadcastState();
+  addLog(`Logo lastet opp av ${req.auth.user.username} (${Math.round(parsed.buffer.length / 1024)} kB)`, 'ACTION');
+  return res.json({ ok: true });
+});
+
+app.delete('/api/admin/branding/logo', requireAuth(['ADMIN']), (req, res) => {
+  state.branding = { ...state.branding, brandLogoData: undefined, logoVersion: undefined, brandLogoUrl: '' };
+  saveState();
+  broadcastState();
+  addLog(`Logo fjernet av ${req.auth.user.username}`, 'ACTION');
+  return res.json({ ok: true });
+});
+
+// --- Statistics ---
+
+const statsRange = (req) => {
+  const today = localDay();
+  const from = isValidDay(req.query.from) ? req.query.from : today;
+  const to = isValidDay(req.query.to) ? req.query.to : from;
+  return from <= to ? { from, to } : { from: to, to: from };
 };
 
-const pruneOldFiles = (dir, extension, retentionDays, label) => {
-  const started = Date.now();
+app.get('/api/stats', requireAuth(['ADMIN', 'OPERATOR']), (req, res) => {
+  const { from, to } = statsRange(req);
+  return res.json(buildStats(from, to, state.tickets));
+});
+
+app.get('/api/stats/export.csv', requireAuth(['ADMIN']), (req, res) => {
+  const { from, to } = statsRange(req);
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="qflow-${from}_${to}.csv"`);
+  // BOM so Excel opens UTF-8 (æøå) correctly
+  return res.send(`\uFEFF${historyCsv(from, to)}`);
+});
+
+// --- Backups ---
+
+app.post('/api/admin/backup', requireAllowedIP, backupFileLimiter, requireAuth(['ADMIN']), async (req, res) => {
   try {
-    if (!fs.existsSync(dir)) return;
-    const cutoff = Date.now() - retentionDays * 24 * 60 * 60 * 1000;
-    const files = fs.readdirSync(dir).filter(f => f.endsWith(extension));
-    let removed = 0;
-    files.forEach((f) => {
-      const full = join(dir, f);
-      const stat = fs.statSync(full);
-      if (stat.mtimeMs < cutoff) {
-        fs.unlinkSync(full);
-        removed += 1;
-      }
-    });
-    const duration = Date.now() - started;
-    if (removed > 0 || duration > 500) {
-      addLog(`Prunet ${removed} gamle ${label} (${duration}ms)`, 'INFO');
+    const file = await runBackup('manual', req.auth.user.username);
+    return res.json({ ok: true, file });
+  } catch (err) {
+    console.error('Backup failed', err);
+    return res.status(500).json({ error: 'backup_failed' });
+  }
+});
+
+app.get('/api/admin/backups', requireAllowedIP, backupFileLimiter, requireAuth(['ADMIN']), (req, res) => {
+  try {
+    return res.json({ ok: true, backups: listBackups() });
+  } catch (err) {
+    console.error('List backups failed', err);
+    return res.status(500).json({ error: 'list_failed' });
+  }
+});
+
+app.get('/api/admin/backup/:file', requireAllowedIP, backupFileLimiter, requireAuth(['ADMIN']), (req, res) => {
+  const target = backupPath(req.params.file);
+  if (!target) return res.status(404).json({ error: 'not_found' });
+  addLog(`Backup lastet ned: ${req.params.file} av ${req.auth.user.username}`, 'ACTION');
+  return res.download(target, req.params.file);
+});
+
+app.delete('/api/admin/backup/:file', requireAllowedIP, backupFileLimiter, requireAuth(['ADMIN']), (req, res) => {
+  const target = backupPath(req.params.file);
+  if (!target) return res.status(404).json({ error: 'not_found' });
+  fs.unlinkSync(target);
+  addLog(`Backup slettet: ${req.params.file} av ${req.auth.user.username}`, 'ACTION');
+  return res.json({ ok: true });
+});
+
+// Replaces the live data with a backup. Current sessions and kiosk devices are kept,
+// so nobody is signed out; a safety backup is taken first.
+const restoreBackup = async (file, actor) => {
+  const { state: restored, history } = readBackup(file);
+  const safety = await runBackup('pre-restore', actor);
+  const keep = { sessions: state.sessions, devices: state.devices };
+  const next = prepareState(restored);
+  next.sessions = Object.fromEntries(Object.entries(keep.sessions).filter(([, s]) => next.users.some((u) => u.id === s.userId)));
+  next.devices = keep.devices;
+  state = next;
+  bootstrapAdmin();
+  replaceHistory(history);
+  if ((state.dataVersion || 0) < DATA_VERSION) {
+    queue.migrateLegacyTickets();
+    state.dataVersion = DATA_VERSION;
+  }
+  queue.syncCounters();
+  queue.refreshTodaySummary();
+  reinitPassport();
+  saveNow();
+  refreshAllSockets();
+  broadcastState();
+  addLog(`Data gjenopprettet fra ${file.split(/[\\/]/).pop()} av ${actor} (sikkerhetskopi før gjenoppretting: ${safety})`, 'ALERT');
+  return safety;
+};
+
+app.post('/api/admin/backup/:file/restore', requireAllowedIP, backupFileLimiter, requireAuth(['ADMIN']), async (req, res) => {
+  const target = backupPath(req.params.file);
+  if (!target) return res.status(404).json({ error: 'not_found' });
+  try {
+    const safety = await restoreBackup(target, req.auth.user.username);
+    return res.json({ ok: true, safetyBackup: safety });
+  } catch (err) {
+    addLog(`Gjenoppretting feilet: ${err?.message || err}`, 'ALERT');
+    return res.status(400).json({ error: 'restore_failed' });
+  }
+});
+
+app.post(
+  '/api/admin/backups/upload',
+  requireAllowedIP,
+  backupFileLimiter,
+  requireAuth(['ADMIN']),
+  express.raw({ type: 'application/octet-stream', limit: '200mb' }),
+  (req, res) => {
+    if (!Buffer.isBuffer(req.body)) return res.status(400).json({ error: 'not_a_sqlite_database' });
+    try {
+      const file = saveUploadedBackup(req.body);
+      addLog(`Backup lastet opp: ${file} av ${req.auth.user.username}`, 'ACTION');
+      return res.json({ ok: true, file });
+    } catch (err) {
+      return res.status(400).json({ error: err?.message || 'invalid_backup' });
     }
-  } catch (e) {
-    console.warn(`Failed to prune ${label}`, e);
-  }
-};
+  },
+);
 
-const pruneOldLogs = () => pruneOldFiles(LOG_DIR, '.log', LOG_RETENTION_DAYS, 'loggfiler');
-const pruneOldBackups = () => pruneOldFiles(BACKUP_DIR, '.db', BACKUP_RETENTION_DAYS, 'backups');
+// --- Health ---
 
-// Periodic log pruning
-pruneOldLogs();
-setInterval(pruneOldLogs, 12 * 60 * 60 * 1000); // every 12h
-
-// Periodic backup pruning
-pruneOldBackups();
-setInterval(pruneOldBackups, 12 * 60 * 60 * 1000);
-
-// --- Settings validation ---
-
-const VALID_TICKET_STATUSES = new Set(['WAITING', 'SERVING', 'COMPLETED', 'CANCELLED']);
-const SOUND_KEYS = ['kioskEffects', 'adminEffects', 'callChime', 'callVoice'];
-const ROLE_OF = (role) => (role === 'ADMIN' ? 'ADMIN' : 'OPERATOR');
-
-const isAllowedLogoUrl = (url) => url === ''
-  || /^data:image\/(png|jpe?g|gif|webp|svg\+xml);base64,[A-Za-z0-9+/=]+$/.test(url)
-  || /^https?:\/\/[^\s]+$/i.test(url);
-
-// Returns { users, removedIds, credentialChangedIds } or { error }.
-const buildUsersUpdate = (incoming) => {
-  const seen = new Set();
-  const credentialChangedIds = [];
-  const nextUsers = [];
-  for (const u of incoming) {
-    if (!u || typeof u !== 'object') return { error: 'invalid_user' };
-    const existing = typeof u.id === 'string' ? state.users.find(x => x.id === u.id) : null;
-    const username = cleanText(u.username || existing?.username || '', 64);
-    if (!username) return { error: 'missing_username' };
-    if (seen.has(username.toLowerCase())) return { error: 'duplicate_username' };
-    seen.add(username.toLowerCase());
-    const name = cleanText(u.name || '', 80) || existing?.name || username;
-
-    // Hashes are never accepted from clients; only a new plaintext password can change them.
-    let passwordHash = existing?.passwordHash || '';
-    let mustChangePassword = !!existing?.mustChangePassword;
-    if (u.password) {
-      const policy = passwordPolicy(u.password);
-      if (!policy.ok) return { error: policy.error };
-      passwordHash = hashPassword(u.password);
-      mustChangePassword = u.mustChangePassword === true;
-      if (existing) credentialChangedIds.push(existing.id);
-    }
-    if (!existing && !passwordHash) return { error: 'password_required' };
-
-    nextUsers.push({
-      id: existing?.id || (isSafeId(u.id) ? u.id : `u_${randomId()}`),
-      name,
-      username,
-      role: ROLE_OF(u.role),
-      provider: existing?.provider || 'local',
-      email: existing?.email,
-      externalId: existing?.externalId,
-      passwordHash,
-      mustChangePassword,
-    });
-  }
-  if (!nextUsers.some(u => u.role === 'ADMIN')) return { error: 'must_have_admin' };
-  const keptIds = new Set(nextUsers.map(u => u.id));
-  const removedIds = state.users.filter(u => !keptIds.has(u.id)).map(u => u.id);
-  // A demoted user must not keep an admin session.
-  nextUsers.forEach((u) => {
-    const before = state.users.find(x => x.id === u.id);
-    if (before && before.role !== u.role) credentialChangedIds.push(u.id);
+app.get('/health', (req, res) => {
+  res.json({
+    status: 'ok',
+    services: state.services?.length || 0,
+    counters: state.counters?.length || 0,
+    tickets: state.tickets?.length || 0,
+    kiosks: state.kiosks?.length || 0,
+    printers: state.printers?.length || 0,
+    isClosed: !!state.isClosed,
   });
-  return { users: nextUsers, removedIds, credentialChangedIds };
-};
+});
 
-const buildPrintersUpdate = (incoming) => {
-  const printers = [];
-  for (const p of incoming) {
-    if (!p || typeof p !== 'object') return { error: 'invalid_printer' };
-    const ipAddress = typeof p.ipAddress === 'string' ? p.ipAddress.trim() : '';
-    const port = Number(p.port) || 9100;
-    if (!isValidPrinterHost(ipAddress) || !isValidPort(port)) return { error: 'invalid_printer' };
-    const existing = typeof p.id === 'string' ? state.printers.find(x => x.id === p.id) : null;
-    printers.push({
-      id: existing?.id || (isSafeId(p.id) ? p.id : randomId()),
-      name: cleanText(p.name, 80) || ipAddress,
-      ipAddress,
-      port,
-      type: p.type === 'GENERIC_NETWORK' ? 'GENERIC_NETWORK' : 'EPSON_IP',
-      status: existing?.status || 'OFFLINE',
-    });
-  }
-  return { printers };
-};
-
-const mergeProvider = (current = {}, incoming = {}, extraBooleans = []) => {
-  const next = { ...current };
-  if (typeof incoming.enabled === 'boolean') next.enabled = incoming.enabled;
-  if (typeof incoming.clientId === 'string') next.clientId = cleanText(incoming.clientId, 512);
-  // Secrets are write-only: an empty value means "keep the stored secret".
-  if (typeof incoming.clientSecret === 'string' && incoming.clientSecret.trim()) next.clientSecret = incoming.clientSecret.trim().slice(0, 1024);
-  if (typeof incoming.autoProvision === 'boolean') next.autoProvision = incoming.autoProvision;
-  if (incoming.defaultRole !== undefined) next.defaultRole = ROLE_OF(incoming.defaultRole);
-  extraBooleans.forEach((key) => {
-    if (typeof incoming[key] === 'boolean') next[key] = incoming[key];
-  });
-  return next;
-};
-
-// --- Socket.IO Logic ---
+// --- Socket.IO ---
 
 io.use((socket, next) => {
   const authHeader = socket.handshake.headers?.authorization || '';
@@ -1118,13 +1293,13 @@ io.use((socket, next) => {
 
 io.on('connection', (socket) => {
   applySocketAuth(socket);
-  addLog(`Socket connected ${socket.id} role=${socket.data.authRole} ip=${socket.data.ip}`, 'INFO');
+  debugLog(`Socket connected ${socket.id} role=${socket.data.authRole} ip=${socket.data.ip}`);
 
   // Rejected packets surface as 'error' events; without a listener they would crash the process.
   socket.on('error', (err) => {
     if (err?.message === 'rate_limited' && !socket.data.rateLimitLogged) {
       socket.data.rateLimitLogged = true;
-      addLog(`Socket ${socket.id} fra ${socket.data.ip} struper (for mange hendelser)`, 'ALERT');
+      addLog(`Socket ${socket.id} fra ${socket.data.ip} strupes (for mange hendelser)`, 'ALERT');
     }
   });
 
@@ -1144,542 +1319,15 @@ io.on('connection', (socket) => {
   socket.on('disconnect', (reason) => {
     socketEvents.reset(socket.id);
     publicTicketsBySocket.reset(socket.id);
-    addLog(`Socket disconnected ${socket.id} (${reason})`, 'INFO');
+    debugLog(`Socket disconnected ${socket.id} (${reason})`);
   });
 
-  // Allow clients to request state again (e.g., if initial emit was missed)
   socket.on('request-state', () => {
     refreshSocket(socket);
     sendState(socket);
   });
 
-  // --- Ticket Handlers ---
-
-  socket.on('add-ticket', async (payload, ack) => {
-    const reply = typeof ack === 'function' ? ack : () => {};
-    const deny = (error) => {
-      socket.emit('add-ticket-denied', { error });
-      reply({ ok: false, error });
-    };
-    refreshSocket(socket);
-    const { serviceId, language } = payload || {};
-
-    if (state.isClosed) {
-      addLog('Forsøk på å trekke billett mens systemet er stengt', 'ALERT');
-      return deny('closed');
-    }
-    const service = typeof serviceId === 'string' ? state.services.find(s => s.id === serviceId && s.isOpen !== false) : null;
-    if (!service) {
-      addLog(`Forsøk på å trekke billett for utilgjengelig tjeneste (${cleanText(String(serviceId ?? ''), 40)})`, 'ALERT');
-      return deny('service_unavailable');
-    }
-    if (socket.data.authRole === 'PUBLIC') {
-      if (!publicTicketsBySocket.hit(socket.id) || !publicTicketsByIp.hit(socket.data.ip)) {
-        addLog(`Billett avvist for ${socket.data.ip}: for mange billetter på kort tid`, 'ALERT');
-        return deny('rate_limited');
-      }
-    }
-    const waitingCount = state.tickets.filter(t => t.status === 'WAITING').length;
-    if (waitingCount >= MAX_WAITING_TICKETS) {
-      addLog(`Billett avvist: køen er full (${waitingCount} ventende)`, 'ALERT');
-      return deny('queue_full');
-    }
-
-    // Calculate number
-    const serviceTickets = state.tickets.filter(t => t.serviceId === serviceId);
-    let maxNum = 0;
-    serviceTickets.forEach(t => {
-      const num = parseInt(t.number.replace(service.prefix, ''));
-      if (!isNaN(num) && num > maxNum) maxNum = num;
-    });
-    const nextNum = (maxNum + 1).toString().padStart(3, '0');
-
-    const newTicket = {
-      id: crypto.randomBytes(6).toString('hex'),
-      number: `${service.prefix}${nextNum}`,
-      serviceId,
-      status: 'WAITING',
-      createdAt: Date.now(),
-    };
-
-    state.tickets.push(newTicket);
-    addLog(`Ny billett trukket: ${newTicket.number} (${service.name})`, 'ACTION');
-
-    if (waitingCount + 1 >= WAITING_ALERT_THRESHOLD && Date.now() - lastQueueAlertAt > WAITING_ALERT_INTERVAL_MS) {
-      lastQueueAlertAt = Date.now();
-      addLog(`Kø over terskel ${WAITING_ALERT_THRESHOLD}: ${waitingCount + 1} ventende`, 'ALERT');
-    }
-
-    saveState();
-    broadcastState();
-
-    // Only an activated kiosk device can make the server print, and only on its own printer.
-    const kioskKey = socket.data.kioskId;
-    const assignedPrinterId = kioskKey
-      ? (state.kiosks.find(k => k.id === kioskKey)?.assignedPrinterId || state.kioskPrinterAssignments?.[kioskKey])
-      : null;
-    const printer = assignedPrinterId ? state.printers.find(p => p.id === assignedPrinterId) : null;
-    if (kioskKey && !printer) {
-      addLog(`Ingen skriver tilordnet kiosk ${kioskKey} ved utskrift av ${newTicket.number}`, 'INFO');
-    }
-    reply({ ok: true, ticket: newTicket, printing: !!printer });
-    if (!printer) return;
-
-    const result = await printTicket({
-      printer,
-      ticket: newTicket,
-      serviceName: service.name,
-      waitTime: ticketWaitTime(service),
-      language: language === 'en' ? 'en' : 'no',
-      brandText: state.branding?.brandText,
-      brandLogoUrl: state.branding?.brandLogoUrl,
-      log: addLog,
-    }).catch((err) => ({ ok: false, error: err?.message || String(err) }));
-    if (!result.ok) {
-      addLog(`Kiosk-utskrift feilet for ${newTicket.number} via ${printer.ipAddress}:${printer.port || 9100} (${result.error})`, 'ALERT');
-    }
-  });
-
-  socket.on('update-ticket-status', (payload) => {
-    const { ticketId, status, counterId } = payload || {};
-    if (!requireRole(socket, ['ADMIN', 'OPERATOR'])) {
-      addLog(`Avvist statusendring for ${cleanText(String(ticketId ?? ''), 40)} av ${actorLabel(socket)} (mangler rolle)`, 'ALERT');
-      return;
-    }
-    if (!VALID_TICKET_STATUSES.has(status)) return;
-    if (counterId !== undefined && counterId !== null && !state.counters.some(c => c.id === counterId)) return;
-    const ticketIndex = state.tickets.findIndex(t => t.id === ticketId);
-    if (ticketIndex === -1) return;
-
-    const ticket = state.tickets[ticketIndex];
-    const oldStatus = ticket.status;
-
-    // Update ticket
-    state.tickets[ticketIndex] = {
-      ...ticket,
-      status,
-      counterId: counterId || ticket.counterId,
-      completedAt: status === 'COMPLETED' ? Date.now() : ticket.completedAt,
-      calledAt: status === 'SERVING' ? Date.now() : ticket.calledAt
-    };
-
-    // Update counter currentTicketId if necessary
-    if (counterId) {
-      const counterIndex = state.counters.findIndex(c => c.id === counterId);
-      if (counterIndex !== -1) {
-        if (status === 'SERVING') {
-          state.counters[counterIndex].currentTicketId = ticketId;
-        } else if (status === 'COMPLETED' && state.counters[counterIndex].currentTicketId === ticketId) {
-          state.counters[counterIndex].currentTicketId = undefined;
-        }
-      }
-    }
-
-    if (status === 'SERVING') {
-      const counter = state.counters.find(c => c.id === counterId);
-      const counterName = counter?.name || 'skranken';
-      addLog(`Skranke ${counter?.name || '?'} kaller inn ${ticket.number}`, 'ACTION');
-      io.emit('play-sound', {
-        type: 'ding',
-        textNo: `Nummer ${ticket.number}, til ${counterName}`,
-        textEn: `Ticket ${ticket.number}, go to ${counterName}`
-      });
-    }
-
-    addLog(`Statusendring ${ticket.number}: ${oldStatus} -> ${status} av ${actorLabel(socket)}`, 'ACTION');
-
-    saveState();
-    broadcastState();
-  });
-
-  socket.on('delete-ticket', (payload) => {
-    const { ticketId } = payload || {};
-    if (!requireRole(socket, ['ADMIN', 'OPERATOR'])) {
-      addLog(`Avvist sletting av billett av ${actorLabel(socket)} (mangler rolle)`, 'ALERT');
-      return;
-    }
-    const ticket = state.tickets.find(t => t.id === ticketId);
-    if (!ticket) return;
-    state.tickets = state.tickets.filter(t => t.id !== ticketId);
-    addLog(`Billett slettet manuelt: ${ticket.number} av ${actorLabel(socket)}`, 'ALERT');
-    saveState();
-    broadcastState();
-  });
-
-  socket.on('reset-system', () => {
-    if (!requireRole(socket, ['ADMIN'])) {
-      addLog(`Avvist nullstilling av ${actorLabel(socket)} (mangler rolle)`, 'ALERT');
-      return;
-    }
-    state.tickets = [];
-    state.counters = state.counters.map(c => ({...c, currentTicketId: undefined}));
-    state.logs = [];
-    addLog(`Systemet ble nullstilt av ${actorLabel(socket)}`, 'ALERT');
-    saveState();
-    broadcastState();
-  });
-
-  // --- Admin/Config Handlers ---
-
-  socket.on('update-settings', (updates) => {
-    if (!requireRole(socket, ['ADMIN'])) {
-      addLog(`Avvist innstillinger fra ${actorLabel(socket)} (mangler rolle)`, 'ALERT');
-      return;
-    }
-    const actor = actorLabel(socket);
-    const safe = (obj) => (obj && typeof obj === 'object' ? obj : {});
-    const next = safe(updates);
-    const changes = [];
-    const rejectSettings = (error) => {
-      addLog(`Innstillinger avvist for ${actor}: ${error}`, 'ALERT');
-      socket.emit('settings-error', { error });
-    };
-
-    // Validate everything before applying anything, so a bad field cannot leave a half-applied update.
-    let usersUpdate = null;
-    if (Array.isArray(next.users)) {
-      usersUpdate = buildUsersUpdate(next.users);
-      if (usersUpdate.error) {
-        addLog(`Brukeroppdatering avvist: ${actor} (${usersUpdate.error})`, 'ALERT');
-        socket.emit('update-users-error', { error: usersUpdate.error });
-        return;
-      }
-    }
-    let printersUpdate = null;
-    if (Array.isArray(next.printers)) {
-      printersUpdate = buildPrintersUpdate(next.printers);
-      if (printersUpdate.error) return rejectSettings(printersUpdate.error);
-    }
-    let pinHash = null;
-    if (Object.prototype.hasOwnProperty.call(next, 'kioskExitPin')) {
-      const pin = typeof next.kioskExitPin === 'string' ? next.kioskExitPin.trim() : '';
-      if (pin && !/^\d{4,12}$/.test(pin)) return rejectSettings('invalid_pin');
-      pinHash = pin ? hashPassword(pin) : '';
-    }
-    if (next.branding && typeof next.branding.brandLogoUrl === 'string' && !isAllowedLogoUrl(next.branding.brandLogoUrl)) {
-      return rejectSettings('invalid_logo');
-    }
-    const incomingIssuer = next.authProviders?.oidc?.issuerUrl;
-    if (typeof incomingIssuer === 'string' && incomingIssuer.trim() && !/^https?:\/\/[^\s]+$/i.test(incomingIssuer.trim())) {
-      return rejectSettings('invalid_issuer_url');
-    }
-
-    if (Array.isArray(next.services)) {
-      state.services = next.services.filter((s) => s && typeof s === 'object').map((s) => ({
-        id: isSafeId(s.id) ? s.id : randomId(),
-        name: cleanText(s.name, 80) || 'Tjeneste',
-        prefix: (cleanText(s.prefix, 2).toUpperCase() || 'X'),
-        color: typeof s.color === 'string' && /^bg-[a-z]+-\d{3}$/.test(s.color) ? s.color : 'bg-gray-500',
-        estimatedTimePerPersonMinutes: Number(s.estimatedTimePerPersonMinutes) || 5,
-        isOpen: s.isOpen !== false,
-        priority: Number.isFinite(Number(s.priority)) ? Number(s.priority) : 1,
-      }));
-      changes.push(`tjenester=${state.services.length}`);
-    }
-    if (Array.isArray(next.counters)) {
-      state.counters = next.counters.filter((c) => c && typeof c === 'object').map((c) => ({
-        id: isSafeId(c.id) ? c.id : randomId(),
-        name: cleanText(c.name, 80) || 'Skranke',
-        activeServiceIds: Array.isArray(c.activeServiceIds) ? c.activeServiceIds.filter((id) => typeof id === 'string' && id.length > 0) : [],
-        isOnline: c.isOnline !== false,
-        currentTicketId: typeof c.currentTicketId === 'string' ? c.currentTicketId : undefined,
-      }));
-      changes.push(`skranker=${state.counters.length}`);
-    }
-    if (usersUpdate) {
-      state.users = usersUpdate.users;
-      // Sign out removed users and users whose password or role changed (except the acting admin's own session).
-      [...usersUpdate.removedIds, ...usersUpdate.credentialChangedIds].forEach((id) => deleteUserSessions(id, socket.data.sessionKey));
-      changes.push(`brukere=${state.users.length}`);
-    }
-    if (printersUpdate) {
-      state.printers = printersUpdate.printers;
-      changes.push(`skrivere=${state.printers.length}`);
-    }
-    if (next.isClosed !== undefined) state.isClosed = !!next.isClosed;
-    if (next.soundSettings && typeof next.soundSettings === 'object') {
-      const sound = { ...state.soundSettings };
-      SOUND_KEYS.forEach((key) => {
-        if (typeof next.soundSettings[key] === 'boolean') sound[key] = next.soundSettings[key];
-      });
-      state.soundSettings = sound;
-    }
-    if (next.publicMessage !== undefined) state.publicMessage = String(next.publicMessage || '').slice(0, 500);
-    if (next.branding && typeof next.branding === 'object') {
-      const branding = { ...state.branding };
-      if (typeof next.branding.brandText === 'string') branding.brandText = next.branding.brandText.slice(0, 60);
-      if (typeof next.branding.brandLogoUrl === 'string') branding.brandLogoUrl = next.branding.brandLogoUrl;
-      state.branding = branding;
-    }
-    if (pinHash !== null) {
-      state.kioskExitPinHash = pinHash;
-      changes.push('kiosk-pin');
-    }
-    if (next.authProviders && typeof next.authProviders === 'object') {
-      const before = JSON.stringify(state.authProviders);
-      const incomingGoogle = safe(next.authProviders.google);
-      const google = mergeProvider(state.authProviders.google, incomingGoogle);
-      if (Array.isArray(incomingGoogle.allowedDomains)) {
-        google.allowedDomains = incomingGoogle.allowedDomains
-          .filter(d => typeof d === 'string' && d.trim().length > 0)
-          .map(d => d.trim().toLowerCase().slice(0, 253));
-      }
-      const incomingOidc = safe(next.authProviders.oidc);
-      const oidc = mergeProvider(state.authProviders.oidc, incomingOidc, ['requireVerifiedEmail']);
-      if (typeof incomingOidc.issuerUrl === 'string') oidc.issuerUrl = incomingOidc.issuerUrl.trim();
-      state.authProviders = { ...state.authProviders, google, oidc };
-      if (JSON.stringify(state.authProviders) !== before) {
-        // Reinitialize passport with new configuration
-        initializePassport(state, createSession, addLog);
-        changes.push('auth-providers');
-      }
-    }
-
-    saveState();
-    if (usersUpdate) refreshAllSockets();
-    broadcastState();
-    addLog(`Innstillinger oppdatert av ${actor}${changes.length ? ` (${changes.join(', ')})` : ''}`, 'ACTION');
-  });
-
-  // --- Kiosk devices ---
-
-  // An admin turns the current browser into a kiosk. The kiosk gets its own device token,
-  // so no admin session has to stay on a public device.
-  socket.on('activate-kiosk', (payload, ack) => {
-    const reply = typeof ack === 'function' ? ack : () => {};
-    if (!requireRole(socket, ['ADMIN'])) {
-      addLog(`Avvist kioskaktivering av ${actorLabel(socket)} (mangler rolle)`, 'ALERT');
-      return reply({ ok: false, error: 'unauthorized' });
-    }
-    const requested = payload?.kioskId;
-    const kioskId = typeof requested === 'string' && /^kiosk_[a-z0-9]{4,32}$/.test(requested) ? requested : `kiosk_${randomId()}`;
-    const name = cleanText(payload?.name, 80) || `Kiosk ${kioskId.slice(-4).toUpperCase()}`;
-    revokeKioskDevices(kioskId);
-    const deviceToken = generateToken(32);
-    state.devices[hashToken(deviceToken)] = { kioskId, name, createdAt: Date.now(), createdBy: socket.data.userId };
-    saveState();
-    addLog(`Kiosk ${name} (${kioskId}) aktivert av ${actorLabel(socket)}`, 'ACTION');
-    reply({ ok: true, deviceToken, kioskId });
-  });
-
-  socket.on('register-kiosk', () => {
-    refreshSocket(socket);
-    const kioskId = socket.data.kioskId;
-    if (!kioskId) return;
-    const device = getDevice(socket.data.deviceToken);
-    const name = device?.name || `Kiosk ${kioskId.slice(-4).toUpperCase()}`;
-    const rememberedPrinter = state.kioskPrinterAssignments[kioskId];
-    const existingIdx = state.kiosks.findIndex(k => k.id === kioskId);
-    if (existingIdx !== -1) {
-      const existing = state.kiosks[existingIdx];
-      state.kiosks[existingIdx] = {
-        ...existing,
-        name,
-        assignedPrinterId: existing.assignedPrinterId || rememberedPrinter,
-        lastSeen: Date.now(),
-      };
-    } else {
-      if (state.kiosks.length >= MAX_KIOSKS) return;
-      state.kiosks.push({ id: kioskId, name, lastSeen: Date.now(), assignedPrinterId: rememberedPrinter });
-      addLog(`Kiosk online: ${name}`, 'INFO');
-    }
-    // Heartbeats are not persisted to save IO; only staff see kiosk status.
-    broadcastStaffState();
-  });
-
-  socket.on('verify-kiosk-pin', (payload, ack) => {
-    const reply = typeof ack === 'function' ? ack : () => {};
-    refreshSocket(socket);
-    const kioskId = socket.data.kioskId;
-    if (!kioskId) return reply({ ok: false, error: 'not_a_kiosk' });
-    if (!kioskPinAttempts.hit(kioskId)) {
-      addLog(`For mange PIN-forsøk på kiosk ${kioskId}`, 'ALERT');
-      return reply({ ok: false, error: 'rate_limited' });
-    }
-    const pin = typeof payload?.pin === 'string' ? payload.pin.trim() : '';
-    if (!state.kioskExitPinHash || !verifyPassword(pin, state.kioskExitPinHash)) {
-      addLog(`Feil PIN ved avslutning av kiosk ${kioskId}`, 'ALERT');
-      return reply({ ok: false, error: state.kioskExitPinHash ? 'invalid_pin' : 'pin_not_set' });
-    }
-    kioskPinAttempts.reset(kioskId);
-    // Leaving kiosk mode deactivates the device; an admin has to activate it again.
-    revokeKioskDevices(kioskId);
-    state.kiosks = state.kiosks.filter(k => k.id !== kioskId);
-    saveState();
-    addLog(`Kiosk ${kioskId} avsluttet med PIN`, 'ACTION');
-    reply({ ok: true });
-    refreshAllSockets();
-    broadcastStaffState();
-  });
-
-  socket.on('register-counter-display', (payload) => {
-    const { id, name, counterId } = payload || {};
-    if (!isSafeId(id)) return;
-    const displayName = cleanText(name, 80);
-    if (!displayName) return;
-    const idx = state.counterDisplays.findIndex(d => d.id === id);
-    const now = Date.now();
-    if (idx !== -1) {
-      // Heartbeat: assignment and message are controlled from the admin panel only.
-      state.counterDisplays[idx] = { ...state.counterDisplays[idx], name: displayName, lastSeen: now };
-      broadcastStaffState();
-      return;
-    }
-    if (state.counterDisplays.length >= MAX_COUNTER_DISPLAYS || !counterDisplayRegistrations.hit(socket.data.ip)) {
-      addLog(`Ny skrankeskjerm avvist fra ${socket.data.ip} (grense nådd)`, 'ALERT');
-      return;
-    }
-    const validCounterId = typeof counterId === 'string' && state.counters.some(c => c.id === counterId) ? counterId : undefined;
-    state.counterDisplays.push({ id, name: displayName, counterId: validCounterId, message: '', lastSeen: now });
-    addLog(`Ny skrankeskjerm: ${displayName}`, 'INFO');
-    saveState();
-    broadcastState();
-  });
-
-  socket.on('assign-counter-display', (payload) => {
-    const { displayId, counterId } = payload || {};
-    if (!requireRole(socket, ['ADMIN'])) {
-      addLog(`Avvist kobling av skrankeskjerm av ${actorLabel(socket)} (mangler rolle)`, 'ALERT');
-      return;
-    }
-    const idx = state.counterDisplays.findIndex(d => d.id === displayId);
-    if (idx === -1) return;
-    const validCounterId = typeof counterId === 'string' && state.counters.some(c => c.id === counterId) ? counterId : undefined;
-    state.counterDisplays[idx] = { ...state.counterDisplays[idx], counterId: validCounterId, lastSeen: Date.now() };
-    saveState();
-    addLog(`Skrankeskjerm ${displayId} koblet til skranke ${validCounterId || 'ingen'} av ${actorLabel(socket)}`, 'ACTION');
-    broadcastState();
-  });
-
-  socket.on('set-counter-display-message', (payload) => {
-    const { displayId, message } = payload || {};
-    if (!requireRole(socket, ['ADMIN'])) {
-      addLog(`Avvist endring av skjermmelding av ${actorLabel(socket)} (mangler rolle)`, 'ALERT');
-      return;
-    }
-    const idx = state.counterDisplays.findIndex(d => d.id === displayId);
-    if (idx === -1) return;
-    state.counterDisplays[idx] = { ...state.counterDisplays[idx], message: typeof message === 'string' ? message.slice(0, 300) : '', lastSeen: Date.now() };
-    saveState();
-    addLog(`Oppdatert melding for skrankeskjerm ${displayId} av ${actorLabel(socket)}`, 'ACTION');
-    broadcastState();
-  });
-
-  socket.on('delete-counter-display', (payload) => {
-    const { displayId } = payload || {};
-    if (!requireRole(socket, ['ADMIN'])) {
-      addLog(`Avvist fjerning av skrankeskjerm av ${actorLabel(socket)} (mangler rolle)`, 'ALERT');
-      return;
-    }
-    const before = state.counterDisplays.length;
-    state.counterDisplays = state.counterDisplays.filter(d => d.id !== displayId);
-    if (state.counterDisplays.length !== before) {
-      addLog(`Skrankeskjerm fjernet: ${displayId} av ${actorLabel(socket)}`, 'ACTION');
-      saveState();
-      broadcastState();
-    }
-  });
-
-  socket.on('assign-printer', (payload) => {
-    const { kioskId, printerId } = payload || {};
-    if (!requireRole(socket, ['ADMIN'])) {
-      addLog(`Avvist skriver-tilkobling av ${actorLabel(socket)} (mangler rolle)`, 'ALERT');
-      return;
-    }
-    if (!isSafeId(kioskId)) return;
-    if (printerId && !state.printers.some(p => p.id === printerId)) return;
-    // Persist mapping even if kiosk is currently offline/removed
-    state.kioskPrinterAssignments[kioskId] = printerId || undefined;
-
-    const kIndex = state.kiosks.findIndex(k => k.id === kioskId);
-    if (kIndex !== -1) {
-      state.kiosks[kIndex].assignedPrinterId = printerId || undefined;
-    }
-    saveState();
-    addLog(`Skriver ${printerId || 'ingen'} tilordnet kiosk ${kioskId} av ${actorLabel(socket)}`, 'ACTION');
-    broadcastStaffState();
-  });
-
-  socket.on('play-sound', (payload) => {
-    if (!requireRole(socket, ['ADMIN', 'OPERATOR'])) {
-      addLog(`Avvist lydkommando av ${actorLabel(socket)} (mangler rolle)`, 'ALERT');
-      return;
-    }
-    const type = ['ding', 'print', 'alert'].includes(payload?.type) ? payload.type : 'ding';
-    const sound = { type };
-    ['text', 'textNo', 'textEn'].forEach((key) => {
-      if (typeof payload?.[key] === 'string') sound[key] = cleanText(payload[key], 200);
-    });
-    // Broadcast play-sound requests (e.g., manual call-again)
-    addLog(`Lydkommando trigget av ${actorLabel(socket)} (${type})`, 'INFO');
-    io.emit('play-sound', sound);
-  });
-
-  socket.on('delete-kiosk', (payload) => {
-    const { kioskId } = payload || {};
-    if (!requireRole(socket, ['ADMIN'])) {
-      addLog(`Avvist fjerning av kiosk av ${actorLabel(socket)} (mangler rolle)`, 'ALERT');
-      return;
-    }
-    const before = state.kiosks.length;
-    state.kiosks = state.kiosks.filter(k => k.id !== kioskId);
-    const revoked = revokeKioskDevices(kioskId);
-    if (state.kiosks.length !== before || revoked > 0) {
-      addLog(`Kiosk fjernet: ${kioskId} av ${actorLabel(socket)}${revoked ? ' (enheten er deaktivert)' : ''}`, 'ACTION');
-      saveState();
-      refreshAllSockets();
-      broadcastStaffState();
-    }
-  });
-});
-
-// Health endpoint for monitoring
-app.get('/health', (req, res) => {
-  res.json({
-    status: 'ok',
-    services: state.services?.length || 0,
-    counters: state.counters?.length || 0,
-    tickets: state.tickets?.length || 0,
-    kiosks: state.kiosks?.length || 0,
-    printers: state.printers?.length || 0,
-    isClosed: !!state.isClosed,
-  });
-});
-
-// Admin-triggered backup
-app.post('/api/admin/backup', requireAllowedIP, requireAuth(['ADMIN']), (req, res) => {
-  try {
-    const file = backupDatabase();
-    addLog(`Backup opprettet: ${file} av ${req.auth.user.username}`, 'ACTION');
-    return res.json({ ok: true, file });
-  } catch (err) {
-    console.error('Backup failed', err);
-    return res.status(500).json({ error: 'backup_failed' });
-  }
-});
-
-app.get('/api/admin/backups', requireAllowedIP, requireAuth(['ADMIN']), (req, res) => {
-  try {
-    const items = listBackups();
-    addLog(`Backup-liste hentet av ${req.auth.user.username}`, 'INFO');
-    return res.json({ ok: true, backups: items });
-  } catch (err) {
-    console.error('List backups failed', err);
-    return res.status(500).json({ error: 'list_failed' });
-  }
-});
-
-app.get('/api/admin/backup/:file', requireAllowedIP, requireAuth(['ADMIN']), (req, res) => {
-  const requested = req.params.file || '';
-  if (!/^[A-Za-z0-9._-]+\.db$/.test(requested) || requested.includes('..')) {
-    return res.status(400).json({ error: 'invalid_file' });
-  }
-
-  const target = join(BACKUP_DIR, requested);
-  if (!target.startsWith(BACKUP_DIR)) return res.status(400).json({ error: 'invalid_path' });
-  if (!fs.existsSync(target)) return res.status(404).json({ error: 'not_found' });
-  addLog(`Backup lastet ned: ${requested} av ${req.auth.user.username}`, 'ACTION');
-  return res.download(target, requested);
+  registerSocketHandlers(socket, ctx);
 });
 
 // Serve static files from the 'dist' directory (Vite build)
@@ -1692,9 +1340,39 @@ app.get('*', (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 const HOST = process.env.HOST || '0.0.0.0';
+// A server that cannot listen is useless: exit so systemd reports the failure (and retries).
+httpServer.on('error', (err) => {
+  console.error(`Cannot listen on ${HOST}:${PORT}: ${err.code || err.message}${err.code === 'EADDRINUSE' ? ' (another process is using the port)' : ''}`);
+  process.exit(1);
+});
+
 httpServer.listen(PORT, HOST, () => {
   console.log(`Server running on ${HOST}:${PORT}`);
+  try {
+    // Lets the user CLI detect a running server (it must not edit the database underneath it).
+    fs.writeFileSync(PID_FILE, String(process.pid));
+  } catch {
+    // not critical
+  }
 });
+
+const shutdown = (signal) => {
+  try {
+    saveNow();
+    closeDb();
+  } catch (err) {
+    console.error('Final save failed', err);
+  }
+  try {
+    if (fs.existsSync(PID_FILE) && fs.readFileSync(PID_FILE, 'utf8') === String(process.pid)) fs.unlinkSync(PID_FILE);
+  } catch {
+    // ignore
+  }
+  console.log(`Received ${signal}, state saved. Bye.`);
+  process.exit(0);
+};
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
 
 // Global process error logging
 process.on('unhandledRejection', (reason) => {
